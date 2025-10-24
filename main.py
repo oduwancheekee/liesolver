@@ -4,8 +4,7 @@ from liesolver.utils.io import configure_logging, create_output_dir
 from liesolver.trainer import Trainer
 
 def main():
-    cfg = parse("configs/ls_example.yaml")
-                # "torch_example.yaml")
+    cfg = parse()
     out_dir = create_output_dir(cfg["experiment_name"],
                                     suffix=cfg.get("suffix", ""))
     configure_logging(out_dir / 'run.log')

@@ -1,12 +1,10 @@
-pde: wave_1d
-experiment_name: test_wave
+pde: heat_1d
+experiment_name: test_heat
 seed: 0
 
 data: 
-  # icbc_name: step
-  icbc_expr: tanh(10*(x-0.3)) - tanh(10*(x-0.4)) + tanh(100*(x-0.5)) - tanh(100*(x-0.7))
-  # icbc_expr: sin(2*pi*x)
-  res: 600  
+  icbc_expr: sin(2*pi*x)
+  res: 100  
   num_ic: 1_000
   num_bc: 1_000
   num_domain: 10_000
@@ -16,21 +14,18 @@ data:
   refresh: 0
 
 base: 
-  - T1(0, 10) T4(0, 100) sin(x) cos(t)
-  - T1(-1, 2) T4 1/(1+(x+t)**2) + 1/(1+(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
-  - T1(-1, 2) T4 exp(-(x+t)**2) + exp(-(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
-
-  # - T1 T2 T1 T4 1/(1+(x+t)**2) + 1/(1+(x-t)**2)
-  # - T1 T2 T1 T4 1/(1+(x-t)**2)
+  # - T1(0, 10) T4(0, 100) sin(x) cos(t)
+  # - T1(-1, 2) T4 1/(1+(x+t)**2) + 1/(1+(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
+  # - T1(-1, 2) T4 exp(-(x+t)**2) + exp(-(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
 
 
-  # - T4 T1 sin(x) exp(-t)
-  # - T1 T6 1
-  # - T1 T6 T4 T1 sin(x) exp(-t)
-  # - T1 T2 T4 x
-  # - T1 T2 T4 x^2 + 2t
-  # - T1 T2 T4 x^3 + 6tx
-  # - T1 T2 T4 x^4 + 12t x^2 + 12 t^2
+  - T4 T1 sin(x) exp(-t)
+  - T1 T6 1
+  - T1 T6 T4 T1 sin(x) exp(-t)
+  - T1 T2 T4 x
+  - T1 T2 T4 x^2 + 2t
+  - T1 T2 T4 x^3 + 6tx
+  - T1 T2 T4 x^4 + 12t x^2 + 12 t^2
 
 fit:
   mse_tol: 9e-4
