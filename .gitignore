@@ -1,0 +1,29 @@
+# Byte-compiled Python files
+*.pyc
+*.pyo
+__pycache__/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Ignore specific IDE/editor files
+.vscode/
+.idea/
+*.swp
+
+# SymPy cache
+.sympy_cache/
+
+# VSCode settings
+.vscode/
+
+# Build artifacts
+build/
+dist/
+*.egg
+*.egg-info/
+.eggs/

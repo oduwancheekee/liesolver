@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "liesolver"
+version = "0.1.0"              # static; do NOT read from package
+requires-python = ">=3.12"
+description = "Lie-symmetry-based PDE solver"
+readme = "README.md"
+license = {text = "MIT"}
+dependencies = [
+#  "numpy>=1.23",               # put runtime deps here
+#  "pyyaml>=6",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["liesolver*"]
