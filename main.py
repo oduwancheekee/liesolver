@@ -1,4 +1,4 @@
-from liesolver.loader import parse
+from liesolver.utils.loader import parse
 from liesolver.utils.logging import log_output
 from liesolver.utils.io import configure_logging, create_output_dir
 from liesolver.trainer import Trainer
