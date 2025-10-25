@@ -2,17 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Dict, Union
 
-import matplotlib.pyplot as plt
-import torch
 import yaml
 
 import logging
 import sys
 
 def configure_logging(log_path: str = "run.log") -> None:
-    # fmt = "[%(asctime)s][%(name)s][%(levelname)s] - %(message)s"
+    """
+    Configure application logging to output to stdout and a log file.
+    Args:
+        log_path (str): Path to the log file to append to. Uses INFO level with a
+            '[%(asctime)s] - %(message)s' format and '%Y-%m-%d %H:%M:%S' date format.
+    """
     fmt = "[%(asctime)s] - %(message)s"
     datefmt = "%Y-%m-%d %H:%M:%S"
     logging.basicConfig(
@@ -32,17 +35,12 @@ def create_output_dir(
     suffix: str = "",
 ) -> Path:
     """
-    Make run-specific directory   outputs/DATE/TIME_experiment_suffix
-
-    Parameters
-    ----------
-    experiment_name : str
-    root            : base folder
-    suffix          : optional extra tag (e.g. hyper-run id)
-
-    Returns
-    -------
-    Path to the freshly created directory (parents=True, exist_ok=True).
+    Create a run-specific output directory: root/DATE/TIME_experiment[_suffix].
+    Args:
+        experiment_name (str): Name used in the directory prefix.
+        root (Union[str, Path]): Base output directory (created if missing).
+        suffix (str): Optional extra tag appended after the experiment name.
+    Returns (Path): path to the created directory (parents=True, exist_ok=True).
     """
     date_part, time_part = _now()
     parts = [time_part, experiment_name]
@@ -53,36 +51,21 @@ def create_output_dir(
     return out_dir
 
 def _now() -> tuple[str, str]:
-    """Return (YYYY-MM-DD, HH-MM-SS)."""
+    """Returns (Tuple[str, str]): (YYYY-MM-DD, HH-MM-SS)."""
     ts = datetime.now()
     return ts.date().isoformat(), ts.strftime("%H-%M-%S")
 
 
 def save_config(cfg: Dict, out_dir: Path, name: str = "config.yaml") -> Path:
+    """
+    Save a configuration dictionary as YAML into the output directory.
+    Args:
+        cfg (Dict): Configuration mapping to serialize.
+        out_dir (Path): Destination folder where the file is written.
+        name (str): File name to use (default: 'config.yaml').
+    Returns (Path): path to the written YAML file.
+    """
     path = out_dir / name
     with open(path, "w") as fp:
         yaml.safe_dump(cfg, fp)
-    return path
-
-
-def save_checkpoint(model: Any, out_dir: Path, tag: str = "last") -> Path:
-    """
-    Save *state_dict* if the object has it, otherwise save whole object.
-
-    Example filenames: model_last.pt, model_epoch2000.pt
-    """
-    path = out_dir / f"model_{tag}.pt"
-    obj = model.state_dict() if hasattr(model, "state_dict") else model
-    torch.save(obj, path)
-    return path
-
-
-def save_figure(fig: plt.Figure, out_dir: Path, name: str) -> Path:
-    """
-    Store a matplotlib Figure in *out_dir/name* (dpi=300, tight layout) and close it.
-    """
-    path = out_dir / name
-    fig.tight_layout()
-    fig.savefig(path, dpi=300)
-    plt.close(fig)
     return path

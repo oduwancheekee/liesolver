@@ -1,4 +1,4 @@
-from .loader import load_config, parse
+from .utils.loader import load_config, parse_cli
 from .utils.logging import log_output
 from .utils.io import create_output_dir, configure_logging
 from .trainer import Trainer, FitState

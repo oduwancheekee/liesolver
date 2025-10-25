@@ -24,7 +24,7 @@ base:
 
 fit:
   mse_tol: 9e-4
-  max_terms: 20   # 40->40s, 50->60s, 60->100+s, 70->200+s, 80->300+s
+  max_terms: 5   # 40->40s, 50->60s, 60->100+s, 70->200+s, 80->300+s
   nfev_global: 4  # 2-10 optimal
   nfev_batch: 1 
   batch_size: 9000 # high value turns batch refine off

@@ -25,7 +25,7 @@ def plot_ic_bc(
         ):
     """Plot initial and boundary condition curves with model predictions.
     Args:
-       model (LieSolver | LieModule): Predictor providing outputs.
+       model (LieSolver): Predictor providing outputs.
        data (DataLoader): Provides eval_x, eval_y, range_time, range_spatial.
        filepath (str | Path, optional): Path to save the figure.
     Returns:
@@ -158,31 +158,3 @@ def plot_fit_history(state: "FitState", save_to=None):
     else:
         plt.show()
     plt.close()
-
-def plot_train_history(state: "TrainState", *, save_to=None):
-    """TORCH RELATED 
-    Plot training, test, and eval losses vs global iteration (log scale).
-    Args:
-       state (TrainState): Provides iter_hist, *_loss_hist, stage_iter_hist.
-       save_to (str | Path, optional): Path to save the figure.
-    """
-    plt.figure(figsize=(6, 4))
-    plt.plot(state.iter_hist, state.train_loss_hist, label="train", marker='.')
-    plt.plot(state.iter_hist, state.test_loss_hist, label="test", marker='.')
-    plt.plot(state.iter_hist, state.eval_loss_hist, label="eval", marker='.')
-    
-    for stage_iter in state.stage_iter_hist[1:]:
-        plt.axvline(stage_iter, color='black', linestyle='--', alpha=0.2)
-
-    plt.xlabel("iteration")
-    plt.ylabel("MSE loss")
-    plt.yscale("log")
-    plt.legend()
-    plt.tight_layout()
-
-    if save_to:
-        plt.savefig(save_to, dpi=300)
-    else:
-        plt.show()
-    plt.close()
-

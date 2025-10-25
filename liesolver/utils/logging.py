@@ -64,9 +64,6 @@ class StreamToLogger(io.StringIO):
 def log_output() -> Generator[None, None, None]:
     """
     Context manager to redirect stdout and stderr to a logger.
-
-    Yields:
-        None
     """
     logger = logging.getLogger(__name__)
     stdout_logger = StreamToLogger(logger, logging.INFO)

@@ -133,7 +133,7 @@ def load_config(config_path: str, overrides: Optional[Sequence[str]] = None) -> 
     return config
 
 
-def parse(default: str = "configs/example.yaml") -> dict:
+def parse_cli(default: str = "configs/example.yaml") -> dict:
     """
     Parse CLI, load config, and apply overrides.
     Args:

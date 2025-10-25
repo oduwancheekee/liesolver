@@ -13,7 +13,7 @@ from .model import LieSolver, Base
 from .plotting import plot_2d_domain, plot_ic_bc, plot_fit_history
 
 class Trainer:
-
+    """Data loading, model initialization, training, saving, and plotting."""
     def __init__(self, config: dict, out_dir=None) -> None: 
         self.config = config
         self.out_dir = out_dir
@@ -45,6 +45,10 @@ class Trainer:
 
     @timing
     def fit(self):
+        """Run greedy add-refine training loop, save model, and generate plots.
+        Returns:
+            FitState: Collected training metrics.
+        """
         max_terms = self.fit_cfg.get('max_terms', 20)
         mse_tol = float(self.fit_cfg.get('mse_tol', 1e-3))
         nfev_global = self.fit_cfg.get('nfev_global', 2)
@@ -106,6 +110,8 @@ class Trainer:
 
 @dataclass
 class FitState:
+    """Tracks history of terms, parameters, and metrics during training.
+    """
     nterms_hist: List[float] = field(default_factory=list)
     nparams_hist: List[float] = field(default_factory=list)
     
@@ -115,8 +121,7 @@ class FitState:
     train_l2re_hist: List[float] = field(default_factory=list)
     test_l2re_hist: List[float] = field(default_factory=list)
     domain_l2re_hist: List[float] = field(default_factory=list)
-
-
+    
     def log(
         self,
         model: LieSolver,
