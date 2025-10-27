@@ -116,7 +116,7 @@ def plot_2d_domain(
         fig.savefig(filepath, dpi=300)
     return fig, ax
 
-def plot_fit_history(state: "FitState", save_to=None):
+def plot_fit_history(state, save_to=None):
     """Plot training set MSE vs number of parameters in model (log scale).
     Args:
        state (FitState): Provides nparams_hist, mse_hist
@@ -137,17 +137,19 @@ def plot_fit_history(state: "FitState", save_to=None):
     plt.plot(state.nterms_hist, domain_icbc_ratio, 'k--', 
             #  label=r'ratio $\frac{L2REdomain}{L2REtest}$', 
             #  label=r'ratio ${ L2RE_{domain} }/{ L2RE_{test} }$', 
-             label=r'ratio MSE$_{domain}$ / MSE$_{test}$', 
+             label=r'ratio MSE$_{\text{domain}}$ / MSE$_{\text{test}}$', 
              alpha=0.7)
 
-    label_map = {nterms: fr"{nterms}$_{{{nparams}}}$" for nterms, nparams in zip(state.nterms_hist, state.nparams_hist)}
+    label_map = {nterms: fr"{nterms}({nparams})" for nterms, nparams in zip(state.nterms_hist, state.nparams_hist)}
     ax = plt.gca()
     ax.xaxis.set_major_formatter(FuncFormatter(
         lambda x, pos: label_map.get(int(round(x)), "") if abs(x - round(x)) < 0.25 and int(round(x)) in label_map else ""
     ))
+    ax.yaxis.grid(True, which='major', linestyle='--', color='k', linewidth=0.5, alpha=0.25)
+
     print(f"nparams: {state.nparams_hist[-1]}")
     # plt.title('Fitting progress over number of added terms (parameters)')
-    plt.xlabel(r"terms$_{{parameters}}$")
+    plt.xlabel(r"N$_{\text{terms}}$(N$_{\text{parameters}}$)")
     # plt.ylabel("MSE loss")
     plt.yscale("log")
     plt.legend()

@@ -37,13 +37,12 @@ trafos: list[Transformation] = [
 ]
 
 icbcs = {
-    # "poly": {'u0': x**2 + x**3 - x**5 + x**7},
     "gauss": {'u0': sp.exp(-50 * (x - 0.5) ** 2)},
-    # "gauss_mix": {'u0': sp.exp(-50 * (x - 0.5) ** 2)},
-    # "asym_gauss": {'u0': sp.exp(-3 * (x) ** 2)},
+    "gauss_mix": {'u0': 0.7*sp.exp(-100 * (x - 0.4) ** 2) + sp.exp(-500 * (x - 0.7) ** 2)},
     "sine": {'u0': sp.sin(4*sp.pi*x)},
     "sine_mix": {'u0': 0.5*sp.sin(2*sp.pi*x) - 0.2*sp.sin(4*sp.pi*x)+ 0.7*sp.sin(12*sp.pi*x)},
     "step": {'u0': 0.5 * (sp.tanh(500 * (x - 0.4)) - sp.tanh(500 * (x - 0.6)))},
+    # "wave_mix": {'u0': 0.7*sp.exp(-100 * (x - 0.4) ** 2) + sp.exp(-500 * (x - 0.7) ** 2)},
 }
 
 def solve_icbc(icbc: Mapping[str, sp.Expr] | sp.Expr,

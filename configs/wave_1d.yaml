@@ -1,12 +1,11 @@
 pde: wave_1d
-experiment_name: test_wave
-seed: 0
+experiment_name: wave-gauss_mix-g20_10-b5_4-t120-seed4
+seed: 4
 
 data: 
-  icbc_name: step
-  # icbc_expr: tanh(10*(x-0.3)) - tanh(10*(x-0.4)) + tanh(100*(x-0.5)) - tanh(100*(x-0.7))
+  icbc_name: gauss_mix
   # icbc_expr: sin(2*pi*x)
-  res: 600  
+  res: 100  
   num_ic: 1500
   num_bc: 2500
   num_domain: 10_000
@@ -16,19 +15,19 @@ data:
   refresh: 0
 
 base: 
-  - T1(0, 10) T4(0, 100) sin(x) cos(t)
-  - T1(-1, 2) T4 1/(1+(x+t)**2) + 1/(1+(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
-  - T1(-1, 2) T4 exp(-(x+t)**2) + exp(-(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
-  - T1(-1, 2) T4 exp(-(x+t)**2) cos(x+t) + exp(-(x-t)**2) cos(x-t) 
+  - T4(0,100) T1(0,3.14) sin(x) cos(t)
+  - T1(-1,2) T4(0,1000) exp(-(x+t)**2) + exp(-(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
+  # - T1(-1, 2) T4 1/(1+(x+t)**2) + 1/(1+(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
+  # - T1(-1, 2) T4 exp(-(x+t)**2) cos(x+t) + exp(-(x-t)**2) cos(x-t) 
   # - x cos(x) sin(t) + t sin(x) cos(t) # and other parameter-derivatives of fourier modes 
 
 fit:
-  mse_tol: 9e-4
-  max_terms: 5   # 40->40s, 50->60s, 60->100+s, 70->200+s, 80->300+s
-  nfev_global: 4  # 2-10 optimal
-  nfev_batch: 1 
-  batch_size: 9000 # high value turns batch refine off
-  global_every: 5 # 3-10 optimal
+  mse_tol: 9e-7
+  max_terms: 120 
+  nfev_global: 10
+  nfev_batch: 4
+  batch_size: 5 
+  global_every: 20
   pool_size: 1000
   
 
