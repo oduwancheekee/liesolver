@@ -4,10 +4,10 @@ Run from source:
 ```bash
 python main.py CONFIG [OVERRIDES...]
 # example:
-python main.py configs/ls_example.yaml max_terms=10
+python main.py configs/heat_1d.yaml max_terms=10 seed=1
 ```
 
-Install for use in other projects:
+Installation (in the folder):
 ```bash
-pip install -e .
+pip install .
 ```
