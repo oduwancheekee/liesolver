@@ -8,9 +8,155 @@ import json
 
 import numpy as np
 import sympy as sp
+from scipy.stats import qmc
 
-from . import geometry
 
+class BoxDomain:
+    """Axis-aligned box domain.
+    Args:
+        coords_names (Sequence[str]): Coordinate names, e.g., ["x","y","t"].
+        bounds (np.ndarray): (dim, 2) bounds per coordinate [low, high].
+    """
+    def __init__(self, coords_names: Sequence[str], bounds: np.ndarray):
+        self.coords_names = list(coords_names)
+        self.dim = len(self.coords_names)
+        self.bounds = np.asarray(bounds, dtype=float)
+        self.low = self.bounds[:, 0]
+        self.high = self.bounds[:, 1]
+        self.width = self.high - self.low
+        self.t_idx = self.coords_names.index("t") if "t" in self.coords_names else None
+        self.spatial_idxs = [i for i in range(self.dim) if i != self.t_idx]
+
+    def random_domain_points(self, n: int, sampler: str = "halton", seed: Optional[int] = None) -> np.ndarray:
+        """Random points in the whole domain.
+        Args:
+            n (int): Number of points.
+            sampler (str): 'random'|'sobol'|'lhs'|'latin'|'latin_hypercube'|'halton'.
+            seed (int | None): RNG/QMC seed.
+        Returns:
+            np.ndarray: (n, dim) points scaled from unit box.
+        """
+        if sampler == "random":
+            unit = np.random.default_rng(seed).random((n, self.dim), dtype=float)
+        elif sampler == "sobol":
+            unit = qmc.Sobol(d=self.dim, scramble=True, seed=seed).random(n)
+        elif sampler in ("lhs", "latin", "latin_hypercube"):
+            unit = qmc.LatinHypercube(d=self.dim, seed=seed).random(n)
+        elif sampler == "halton":
+            unit = qmc.Halton(d=self.dim, scramble=True, seed=seed).random(n)
+        else:
+            raise ValueError(f"Unsupported sampler: {sampler}")
+        return self.low + unit * self.width
+
+    def random_initial_points(self, n: int, sampler: str = "halton", seed: Optional[int] = None) -> np.ndarray:
+        """Random points on initial-time face t = t_low.
+        Args:
+            n (int): Number of points.
+            sampler (str): 'random'|'sobol'|'lhs'|'latin'|'latin_hypercube'|'halton'.
+            seed (int | None): RNG/QMC seed.
+        Returns:
+            np.ndarray: (n, dim) points; t fixed at low or empty if no t.
+        """
+        if self.t_idx is None:
+            return np.empty((0, self.dim), dtype=float)
+        X = self.random_domain_points(n, sampler, seed)
+        X[:, self.t_idx] = self.low[self.t_idx]
+        return X
+
+    def random_boundary_points(self, n: int, sampler: str = "halton", seed: Optional[int] = None) -> np.ndarray:
+        """Random points on spatial boundary for t in (t_low, t_high].
+        Args:
+            n (int): Number of points.
+            sampler (str): 'random'|'sobol'|'lhs'|'latin'|'latin_hypercube'|'halton'.
+            seed (int | None): Seed for engines and face selection.
+        Returns:
+            np.ndarray: (n, dim) points uniformly per spatial face.
+        """
+        faces = [(i, side) for i in self.spatial_idxs for side in (0, 1)]
+        if len(faces) == 0:
+            return np.empty((0, self.dim), dtype=float)
+        rng = np.random.default_rng(seed)
+        face_idx = rng.integers(len(faces), size=n)
+        X = self.random_domain_points(n, sampler, seed)
+        axes = np.array([faces[k][0] for k in face_idx], dtype=int)
+        sides = np.array([faces[k][1] for k in face_idx], dtype=int)
+        X[np.arange(n), axes] = self.bounds[axes, sides]
+        if self.t_idx is not None and self.width[self.t_idx] > 0: # maps t from [t_low, t_high) to (t_low, t_high] 
+            u = (X[:, self.t_idx] - self.low[self.t_idx]) / self.width[self.t_idx]
+            X[:, self.t_idx] = self.high[self.t_idx] - u * self.width[self.t_idx]
+        return X
+
+    def uniform_domain_points(self, n: int) -> np.ndarray:
+        """Uniform grid points in the whole domain (includes endpoints).
+        Args:
+            n (int): Number of points.
+        Returns:
+            np.ndarray: (m, dim) points from a dim-D grid; may differ from n.
+        """
+        k = int(np.ceil(n ** (1 / self.dim)))
+        grids = [np.linspace(self.low[i], self.high[i], k) for i in range(self.dim)]
+        mg = np.meshgrid(*grids, indexing="ij")
+        X = np.stack([g.ravel() for g in mg], axis=1)
+        if X.shape[0] != n:
+            print(f"Warning: requested {n} domain points, returning {X.shape[0]}")
+        return X
+    
+    def uniform_initial_points(self, n: int) -> np.ndarray:
+        """Uniform grid points on initial-time face t = low.
+        Args:
+            n (int): Number of points.
+        Returns:
+            np.ndarray: (m, dim) points from a (dim-1)-D grid; may differ from n or empty if no t.
+        """
+        if self.t_idx is None:
+            return np.empty((0, self.dim), dtype=float)
+        k = int(np.ceil(n ** (1 / len(self.spatial_idxs))))
+        grids = [np.linspace(self.low[i], self.high[i], k) for i in self.spatial_idxs]
+        mg = np.meshgrid(*grids, indexing="ij")
+        S = np.stack([g.ravel() for g in mg], axis=1)
+        X = np.empty((S.shape[0], self.dim), dtype=float)
+        for col, idx in enumerate(self.spatial_idxs):
+            X[:, idx] = S[:, col]
+        X[:, self.t_idx] = self.low[self.t_idx]
+        if X.shape[0] != n:
+            print(f"Warning: requested {n} initial points, returning {X.shape[0]}")
+        return X
+    
+    def uniform_boundary_points(self, n: int) -> np.ndarray:
+        """Uniform grid points on spatial boundary for t in (t_low, t_high].
+        Args:
+            n (int): Number of points.
+        Returns:
+            np.ndarray: (m, dim) stacked face grids; may differ from n.
+        """
+        faces = [(i, side) for i in self.spatial_idxs for side in (0, 1)]
+        if len(faces) == 0:
+            return np.empty((0, self.dim), dtype=float)
+        face_dim = self.dim - 1
+        n_per_face = int(np.ceil(n / len(faces)))
+        k = int(np.ceil(n_per_face ** (1 / face_dim)))
+        chunks = []
+        for i, side in faces:
+            varying_axes = [j for j in range(self.dim) if j != i]
+            grids = []
+            for j in varying_axes:
+                if j == self.t_idx:
+                    grids.append(np.linspace(self.low[j], self.high[j], k + 1)[1:])
+                else:
+                    grids.append(np.linspace(self.low[j], self.high[j], k))
+            mg = np.meshgrid(*grids, indexing="ij")
+            S = np.stack([g.ravel() for g in mg], axis=1)
+            X = np.empty((S.shape[0], self.dim), dtype=float)
+            for col, j in enumerate(varying_axes):
+                X[:, j] = S[:, col]
+            X[:, i] = self.bounds[i, side]
+            chunks.append(X)
+        X = np.vstack(chunks)
+        if X.shape[0] != n:
+            print(f"Warning: requested {n} boundary points, returning {X.shape[0]}")
+        return X
+
+    
 
 class DataLoader:
     """
@@ -64,7 +210,7 @@ class DataLoader:
         phys: Optional[Mapping[str, float]] = None,
         data_dir: Union[str, Path] = "data",
         refresh: Union[bool, int] = False,
-        sampler_train: str = "Hammersley",
+        sampler_train: str = "halton",
         pde_mse_tol: float = 1e-10,
         icbc_mse_tol: float = 1e-7,
     ) -> None:
@@ -96,8 +242,10 @@ class DataLoader:
 
         # Geometry dict for PDE solver (x_min/x_max[/y_min/y_max]/t_min/t_max)
         self.geom_dict = self._build_geom_dict()
+        
         # Geometry object for sampling
-        self.geometry_obj = self._build_geometry()
+        coords_names = np.array([str(s) for s in self.coords_sym], dtype=object)
+        self.geometry_obj = BoxDomain(coords_names, self.bounds)
 
         # Normalize IC/BC spec
         self.icbc = self._normalize_icbc(self.icbc_expr, self.icbc_name)
@@ -166,37 +314,6 @@ class DataLoader:
             else:
                 geom[f"{name}_min"], geom[f"{name}_max"] = lo, hi
         return geom
-
-    def _build_geometry(self):
-        """
-        Construct a geometry object using the geometry module:
-        - Spatial: Interval/Rectangle/Hypercube
-        - Time: TimeDomain (if 't' is present)
-        - Combined: GeometryXTime(spatial, time) if time exists
-        """
-        names = [str(s) for s in self.coords_sym]
-        has_t = "t" in names
-        if has_t:
-            t_idx = names.index("t")
-            spatial_indices = [i for i in range(len(names)) if i != t_idx]
-        else:
-            spatial_indices = list(range(len(names)))
-
-        if len(spatial_indices) == 0:
-            raise ValueError("At least one spatial dimension is required.")
-        lo = self.bounds[spatial_indices, 0]
-        hi = self.bounds[spatial_indices, 1]
-        if len(spatial_indices) == 1:
-            spatial = geometry.Interval(lo[0], hi[0])
-        elif len(spatial_indices) == 2:
-            spatial = geometry.Rectangle(lo, hi)
-        else:
-            spatial = geometry.Hypercube(lo, hi)
-
-        if has_t:
-            timed = geometry.TimeDomain(float(self.geom_dict["t_min"]), float(self.geom_dict["t_max"]))
-            return geometry.GeometryXTime(spatial, timed)
-        return spatial
 
     def _normalize_icbc(
         self,
@@ -304,7 +421,7 @@ class DataLoader:
 
         # Domain/interior
         self.domain_x = (
-            geom.equal_split_uniform_points(self.num_domain)
+            geom.uniform_domain_points(self.num_domain)
             if self.num_domain > 0
             else np.empty((0, len(self.coords_sym)), dtype=float)
         )
