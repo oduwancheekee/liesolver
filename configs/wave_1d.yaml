@@ -1,11 +1,11 @@
 pde: wave_1d
-experiment_name: wave-gauss_mix-g20_10-b5_4-t120-seed4
-seed: 4
+experiment_name: wave-step-g20_10-b5_4-mse5-seed0_lm
+seed: 0
 
 data: 
-  icbc_name: gauss_mix
+  icbc_name: step
   # icbc_expr: sin(2*pi*x)
-  res: 100  
+  res: 600  
   num_ic: 1500
   num_bc: 2500
   num_domain: 10_000
@@ -22,12 +22,15 @@ base:
   # - x cos(x) sin(t) + t sin(x) cos(t) # and other parameter-derivatives of fourier modes 
 
 fit:
-  mse_tol: 9e-7
+  mse_tol: 9e-6
   max_terms: 120 
-  nfev_global: 10
-  nfev_batch: 4
-  batch_size: 5 
-  global_every: 20
   pool_size: 1000
+
+  global_every: 20
+  nfev_global: 10
+
+  batch_size: 5 
+  nfev_batch: 4
+
   
 

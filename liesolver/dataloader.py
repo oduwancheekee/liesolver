@@ -156,14 +156,13 @@ class BoxDomain:
             print(f"Warning: requested {n} boundary points, returning {X.shape[0]}")
         return X
 
-    
 
 class DataLoader:
     """
     Analytic PDE data generator and cache.
 
     Resolves a PDE module (liesolver.pdes.<pde_name>), builds an analytic solution from IC/BC via solve_icbc,
-    samples IC/BC/domain points using the geometry module, computes IC/BC and PDE residual MSEs,
+    samples IC/BC/domain points, computes IC/BC and PDE residual MSEs,
     and caches the dataset to disk. Supports loading cached datasets.
 
     Args:
@@ -181,7 +180,7 @@ class DataLoader:
         phys: Optional physical parameters dict passed to PDE solver (e.g., {"alpha": 1.0}).
         data_dir: Directory to save/load datasets.
         refresh: If False/0 and cached file exists, load it; if True/1, recompute and overwrite cache.
-        sampler_train: Sampler name for training boundary/initial points (default "Hammersley"). Test uses "uniform".
+        sampler_train: Sampler name for training boundary/initial points (default "halton").
         pde_mse_tol: Threshold for PDE MSE warning (default 1e-10).
         icbc_mse_tol: Threshold for IC/BC MSE warning (default 1e-7).
 
@@ -235,25 +234,16 @@ class DataLoader:
         self.pde_mse_tol = float(pde_mse_tol)
         self.icbc_mse_tol = float(icbc_mse_tol)
 
-        # Bounds (range_dim) must match coords_sym order
-        if range_dim is None:
-            raise ValueError("range_dim must be provided and match coords_sym order.")
+        # Geometry
         self.bounds = self._validate_bounds(range_dim)
-
-        # Geometry dict for PDE solver (x_min/x_max[/y_min/y_max]/t_min/t_max)
         self.geom_dict = self._build_geom_dict()
-        
-        # Geometry object for sampling
-        coords_names = np.array([str(s) for s in self.coords_sym], dtype=object)
-        self.geometry_obj = BoxDomain(coords_names, self.bounds)
-
-        # Normalize IC/BC spec
         self.icbc = self._normalize_icbc(self.icbc_expr, self.icbc_name)
-
+        self.geometry = BoxDomain([str(s) for s in self.coords_sym], self.bounds)
+        
         # Caching
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.cache_path = self._make_cache_path()
+        self.cache_path = self.data_dir / f"{self.pde_name}-{self._dataset_hash()}.npz"
 
         # Load or compute
         if Path(self.cache_path).exists() and not bool(refresh):
@@ -262,15 +252,12 @@ class DataLoader:
             self._warn_poor_mse()
         else:
             print(f"Generating data with {self.res} modes ...")
-            # Solve analytic solution
+            # Solve analytic solution and lambdify
             self.u_expr = self._solve_icbc(self.icbc, geom=self.geom_dict, phys=self.phys, res=self.res)
-            # Lambdify solution
             self.u_func = sp.lambdify(tuple(self.coords_sym), self.u_expr, modules="numpy")
 
-            # Sample data
+            # Sample data and metrics
             self._sample_all()
-
-            # Metrics
             self.icbc_mse = float(self._get_icbc_error(self.u_expr, self.icbc, geom=self.geom_dict, res=self.res)["MSE"])
             self.pde_mse = float(
                 self._get_pde_residual(self.u_expr, geom=self.geom_dict, phys=self.phys, res=self.res)["MSE"]
@@ -378,10 +365,6 @@ class DataLoader:
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(blob).hexdigest()[:16]
 
-    def _make_cache_path(self) -> Path:
-        dsid = self._dataset_hash()
-        return self.data_dir / f"{self.pde_name}-{dsid}.npz"
-
     def _eval_u(self, X: np.ndarray) -> np.ndarray:
         """Evaluate u_expr at points X (N,D) using coords_sym order. Returns (N,)."""
         vals = self.u_func(*[X[:, i] for i in range(X.shape[1])])
@@ -390,43 +373,26 @@ class DataLoader:
     def _sample_all(self) -> None:
         """
         Sample train/test/domain points and evaluate u on them.
-        Train uses Hammersley sampler; test uses uniform sampler; domain uses equal_split_uniform_points.
+        Train uses halton sampler; test and domain are sampled uniformly.
         """
-        geom = self.geometry_obj
+        geom = self.geometry
 
         # Train: IC + BC
-        train_ic = np.empty((0, len(self.coords_sym)), dtype=float)
-        if hasattr(geom, "random_initial_points") and self.num_ic > 0:
-            train_ic = geom.random_initial_points(self.num_ic, self.sampler_train)
-        train_bc = geom.random_boundary_points(self.num_bc, self.sampler_train) if self.num_bc > 0 else np.empty(
-            (0, len(self.coords_sym)), dtype=float
-        )
-        self._train_ic_n, self._train_bc_n = len(train_ic), len(train_bc)
-        self.train_x = np.vstack([train_ic, train_bc]) if train_ic.size or train_bc.size else np.empty(
-            (0, len(self.coords_sym)), dtype=float
-        )
-        self.train_y = self._eval_u(self.train_x) if self.train_x.size else np.empty((0,), dtype=float)
+        train_ic = geom.random_initial_points(self.num_ic, self.sampler_train)
+        train_bc = geom.random_boundary_points(self.num_bc, self.sampler_train)
+        self.train_x = np.vstack([train_ic, train_bc])
+        self.train_y = self._eval_u(self.train_x)
 
         # Test: IC + BC (uniform)
-        test_ic = np.empty((0, len(self.coords_sym)), dtype=float)
-        if hasattr(geom, "uniform_initial_points") and self.num_ic > 0:
-            test_ic = geom.uniform_initial_points(self.num_ic)
-        test_bc = geom.uniform_boundary_points(self.num_bc) if self.num_bc > 0 else np.empty(
-            (0, len(self.coords_sym)), dtype=float
-        )
-        self.test_x = np.vstack([test_ic, test_bc]) if test_ic.size or test_bc.size else np.empty(
-            (0, len(self.coords_sym)), dtype=float
-        )
-        self.test_y = self._eval_u(self.test_x) if self.test_x.size else np.empty((0,), dtype=float)
+        test_ic = geom.uniform_initial_points(self.num_ic)
+        test_bc = geom.uniform_boundary_points(self.num_bc)
+        self.test_x = np.vstack([test_ic, test_bc])
+        self.test_y = self._eval_u(self.test_x)
 
-        # Domain/interior
-        self.domain_x = (
-            geom.uniform_domain_points(self.num_domain)
-            if self.num_domain > 0
-            else np.empty((0, len(self.coords_sym)), dtype=float)
-        )
-        self.domain_y = self._eval_u(self.domain_x) if self.domain_x.size else np.empty((0,), dtype=float)
-
+        # Domain
+        self.domain_x = geom.uniform_domain_points(self.num_domain)
+        self.domain_y = self._eval_u(self.domain_x)
+        
     # --------------------------- public I/O ---------------------------
 
     def save(self, path: Union[str, Path]) -> None:
@@ -512,8 +478,6 @@ class DataLoader:
             self.num_bc = int(data["num_bc"])
         if "num_domain" in data.files:
             self.num_domain = int(data["num_domain"])
-        # For stratified batching (train is [IC; BC] in that order)
-        self._train_ic_n, self._train_bc_n = self.num_ic, self.num_bc
 
         # Rebuild u_expr and u_func
         expr_str = str(data["u_expr_str"])
@@ -525,18 +489,11 @@ class DataLoader:
         Regenerate training samples (IC/BC) and targets using current geometry and sampler.
         Does not recompute u_expr or MSEs and does not save to disk.
         """
-        geom = self.geometry_obj
-        train_ic = np.empty((0, len(self.coords_sym)), dtype=float)
-        if hasattr(geom, "random_initial_points") and self.num_ic > 0:
-            train_ic = geom.random_initial_points(self.num_ic, self.sampler_train)
-        train_bc = geom.random_boundary_points(self.num_bc, self.sampler_train) if self.num_bc > 0 else np.empty(
-            (0, len(self.coords_sym)), dtype=float
-        )
-        self._train_ic_n, self._train_bc_n = len(train_ic), len(train_bc)
-        self.train_x = np.vstack([train_ic, train_bc]) if train_ic.size or train_bc.size else np.empty(
-            (0, len(self.coords_sym)), dtype=float
-        )
-        self.train_y = self._eval_u(self.train_x) if self.train_x.size else np.empty((0,), dtype=float)
+        geom = self.geometry
+        train_ic = geom.random_initial_points(self.num_ic, self.sampler_train)
+        train_bc = geom.random_boundary_points(self.num_bc, self.sampler_train)
+        self.train_x = np.vstack([train_ic, train_bc])
+        self.train_y = self._eval_u(self.train_x)
 
     def get_batch(
         self,
