@@ -43,6 +43,20 @@ class Trainer:
             sobol_seed=self.seed,
         )
 
+    def _print_metrics(self):
+        """Print concise analysis metrics after refinement (1-2 lines max)."""
+        A = self.model.design_matrix(self.model.terms)
+        cond = self.model.condition_number(A)
+        rank = self.model.matrix_rank(A)
+        expected_rank = min(A.shape)
+        max_overlap, _ = self.model.base_orthogonality(self.data.train_x)
+        
+        # Format: κ(ATA)=X.XXe±XX rank=M/N ortho=X.XXe±XX
+        cond_str = f"{cond:.2e}".replace('e+0', 'e').replace('e-0', 'e-')
+        orth_str = f"{max_overlap:.2e}".replace('e+0', 'e').replace('e-0', 'e-')
+        rank_status = "✓" if rank == expected_rank else f"⚠{expected_rank - rank}"
+        print(f"  κ={cond_str} rank={rank}/{expected_rank}{rank_status} ortho={orth_str}")
+
     @timing
     def fit(self):
         """Run greedy add-refine training loop, save model, and generate plots.
@@ -80,6 +94,7 @@ class Trainer:
                 self.model.refine(max_nfev=nfev_batch, active_idx=active_idx)
                 state.log(self.model, self.data)
                 print(f"Refine batch   | {self.model.mse:.2e}")
+                # self._print_metrics()
             
             # Refine all parameters
             if (
@@ -90,6 +105,7 @@ class Trainer:
                 self.model.refine(max_nfev=nfev_global)
                 state.log(self.model, self.data)
                 print(f"Refine all {K:>2}  | {self.model.mse:.2e}")
+                # self._print_metrics()
             if (self.model.mse <= mse_tol):
                 break
         

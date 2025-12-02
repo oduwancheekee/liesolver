@@ -79,6 +79,7 @@ class Base:
 
     def apply_transform(self):
         """Build transformed expression, collect parameters, and compile f_np.
+        Also compile analytical Jacobian (partial derivatives w.r.t. each parameter).
         """
         self.expression = self.seed_solution
         for i in range(len(self.trafos)):
@@ -91,9 +92,35 @@ class Base:
             self.expression = trafo(self.expression, param_sym)
 
         self.f_np = sp.lambdify(self.coords_sym + self.params_sym, self.expression, modules="numpy")
+        
+        # Compile analytical Jacobian: ∂φ/∂θ_i for each parameter
+        self.jacobian_f_np = []
+        for param_sym in self.params_sym:
+            deriv_expr = sp.diff(self.expression, param_sym)
+            deriv_fn = sp.lambdify(self.coords_sym + self.params_sym, deriv_expr, modules="numpy")
+            self.jacobian_f_np.append(deriv_fn)
 
     def eval(self, X: np.ndarray, params: np.ndarray):
         return self.f_np(*X.T, *params)
+
+    def eval_jacobian(self, X: np.ndarray, params: np.ndarray) -> np.ndarray:
+        """Evaluate analytical Jacobian ∂φ/∂θ at given points and parameters.
+        
+        Args:
+            X (np.ndarray): Input points, shape (n_samples, n_coords)
+            params (np.ndarray): Parameter vector, shape (n_params,)
+        
+        Returns:
+            np.ndarray: Jacobian matrix, shape (n_samples, n_params)
+        """
+        n_samples = X.shape[0]
+        n_params = len(self.params_sym)
+        jac = np.zeros((n_samples, n_params))
+        
+        for i, deriv_fn in enumerate(self.jacobian_f_np):
+            jac[:, i] = deriv_fn(*X.T, *params)
+        
+        return jac
 
     @classmethod
     def init_from_str(cls,
@@ -397,12 +424,85 @@ class LieSolver:
         return np.array(lbs), np.array(ubs)
 
     def _residual_varpro(self, theta: np.ndarray, active_idx: List[int]) -> np.ndarray:
-        """Compute residual using variable-projection with given theta."""
+        """Compute residual using variable-projection with given theta.
+        Caches amplitudes for use by _jacobian_varpro."""
         terms = [BaseTerm(term.base, term.params.copy()) for term in self.terms]
         self._unpack_theta(theta, terms, active_idx)
         A = self.design_matrix(terms)
         a = self.ls_amplitudes(A)
+        self._cached_A = A  # Cache for jacobian computation
+        self._cached_a = a
+        self._cached_terms = terms
         return (A @ a - self.y)
+    
+    def _jacobian_varpro(self, theta: np.ndarray, active_idx: List[int]) -> np.ndarray:
+        """Analytical Jacobian of variable-projection residual: ∂r/∂θ.
+        
+        Requires _residual_varpro to have been called first (caches A, a).
+        
+        Formula: ∂r/∂θ = ∂A/∂θ · a + A · ∂a/∂θ
+        Uses analytical ∂A/∂θ (from symbolic diff) and numerical ∂a/∂θ (via FD).
+        
+        Args:
+            theta: Parameter vector (same as in _residual_varpro).
+            active_idx: Indices of active terms being optimized.
+        
+        Returns:
+            np.ndarray: Jacobian matrix, shape (n_samples, n_params).
+        """
+        A = self._cached_A
+        a = self._cached_a
+        terms = self._cached_terms
+        L = A.shape[0]
+        
+        # Determine active indices
+        if not active_idx:
+            active_idx = list(range(len(terms)))
+        
+        # Compute ∂A/∂θ analytically: (L, Ka) where Ka = number of active params
+        dA_dtheta_list = []
+        param_idx_to_term_idx = {}  # Maps position in theta to term index
+        param_offset = 0
+        for term_idx in active_idx:
+            term = terms[term_idx]
+            jac_term = term.base.eval_jacobian(self.X, term.params)  # (L, K_term)
+            dA_dtheta_list.append(jac_term)
+            K_term = jac_term.shape[1]
+            for local_j in range(K_term):
+                param_idx_to_term_idx[param_offset + local_j] = term_idx
+            param_offset += K_term
+        
+        dA_dtheta = np.hstack(dA_dtheta_list) if dA_dtheta_list else np.zeros((L, 0))  # (L, Ka)
+        Ka = dA_dtheta.shape[1]
+        
+        # First term: ∂A/∂θ · a: for each parameter, multiply its derivative by the corresponding term's amplitude
+        jr_part1 = np.zeros((L, Ka))
+        for j in range(Ka):
+            term_idx = param_idx_to_term_idx[j]
+            jr_part1[:, j] = dA_dtheta[:, j] * a[term_idx]
+        
+        # Second term: A · ∂a/∂θ
+        # Compute ∂a/∂θ numerically by finite differences
+        jr_part2 = np.zeros((L, Ka))
+        eps = 1e-8
+        
+        for j in range(Ka):
+            theta_pert = theta.copy()
+            theta_pert[j] += eps
+            
+            # Evaluate residual at perturbed theta
+            terms_pert = [BaseTerm(term.base, term.params.copy()) for term in self.terms]
+            self._unpack_theta(theta_pert, terms_pert, active_idx)
+            A_pert = self.design_matrix(terms_pert)
+            a_pert = self.ls_amplitudes(A_pert)
+            
+            # Compute A @ (∂a/∂θ_j)
+            da_j = (a_pert - a) / eps  # (M,)
+            jr_part2[:, j] = A @ da_j
+        
+        # Combine: J[:, j] = jr_part1[:, j] + jr_part2[:, j]
+        jac = jr_part1 + jr_part2
+        return jac
     
     def refine(self, max_nfev: int = 10, active_idx: List[int] = []):
         """Nonlinear refinement of term parameters via scipy.optimize.least_squares."""
@@ -413,6 +513,7 @@ class LieSolver:
 
         res = least_squares(
             fun=lambda th: self._residual_varpro(th, active_idx),
+            jac=lambda th: self._jacobian_varpro(th, active_idx),
             x0=self._pack_theta(active_terms),
             bounds=self._bounds_vector(active_terms),
             method="trf",
@@ -432,6 +533,172 @@ class LieSolver:
         elif mse == self.mse:
             print('Refine log: MSE stalled')
         self.mse = mse
+
+    def condition_number(self, A: np.ndarray = None) -> float:
+        """
+        Compute the condition number of A^T A (ratio of largest to smallest eigenvalue).
+        
+        A low condition number (close to 1) indicates a well-conditioned system.
+        A high condition number indicates numerical instability and potential ill-conditioning.
+        
+        Args:
+            A (Optional[np.ndarray]): Design matrix. If None, uses current design matrix.
+        
+        Returns:
+            float: Condition number κ(A^T A) = λ_max / λ_min.
+        """
+        if A is None:
+            A = self.design_matrix(self.terms)
+        
+        if A.shape[1] == 0:
+            return np.inf
+        
+        AtA = A.T @ A
+        eigvals = np.linalg.eigvalsh(AtA)
+        eigvals = np.abs(eigvals[eigvals > 1e-15])  # Filter near-zero eigenvalues
+        
+        if len(eigvals) == 0:
+            return np.inf
+        
+        return float(np.max(eigvals) / np.min(eigvals))
+
+    def matrix_rank(self, A: np.ndarray = None, tol: float = 1e-10) -> int:
+        """
+        Compute the numerical rank of the design matrix A.
+        
+        A full rank matrix has rank equal to min(n_samples, n_features).
+        Rank deficiency indicates linear dependence among base functions.
+        
+        Args:
+            A (Optional[np.ndarray]): Design matrix. If None, uses current design matrix.
+            tol (float): Threshold for considering singular values as non-zero.
+        
+        Returns:
+            int: Numerical rank of A.
+        """
+        if A is None:
+            A = self.design_matrix(self.terms)
+        
+        if A.shape[1] == 0:
+            return 0
+        
+        _, s, _ = np.linalg.svd(A, full_matrices=False)
+        return int(np.sum(s > tol))
+
+    def eigenvalue_distribution(self, A: np.ndarray = None) -> Tuple[np.ndarray, dict]:
+        """
+        Compute eigenvalues of A^T A and statistics on their distribution.
+        
+        For a well-conditioned problem with orthogonal bases, eigenvalues should be
+        clustered and relatively uniform. High variance in eigenvalues indicates
+        some bases are much more important than others.
+        
+        Args:
+            A (Optional[np.ndarray]): Design matrix. If None, uses current design matrix.
+        
+        Returns:
+            Tuple[np.ndarray, dict]: 
+                - eigenvalues (sorted descending)
+                - stats dict with keys:
+                    - 'mean': mean eigenvalue
+                    - 'std': standard deviation of eigenvalues
+                    - 'min': minimum eigenvalue
+                    - 'max': maximum eigenvalue
+                    - 'ratio_max_min': ratio of max to min (condition number)
+        """
+        if A is None:
+            A = self.design_matrix(self.terms)
+        
+        if A.shape[1] == 0:
+            return np.array([]), {'mean': np.nan, 'std': np.nan, 'min': np.nan, 'max': np.nan, 'ratio_max_min': np.inf}
+        
+        AtA = A.T @ A
+        eigvals = np.linalg.eigvalsh(AtA)
+        eigvals = np.sort(eigvals)[::-1]  # Sort descending
+        eigvals = eigvals[eigvals > 1e-15]  # Filter near-zero eigenvalues
+        
+        if len(eigvals) == 0:
+            return np.array([]), {'mean': np.nan, 'std': np.nan, 'min': np.nan, 'max': np.nan, 'ratio_max_min': np.inf}
+        
+        stats = {
+            'mean': float(np.mean(eigvals)),
+            'std': float(np.std(eigvals)),
+            'min': float(np.min(eigvals)),
+            'max': float(np.max(eigvals)),
+            'ratio_max_min': float(np.max(eigvals) / np.min(eigvals))
+        }
+        
+        return eigvals, stats
+
+    def base_orthogonality(self, X: np.ndarray = None) -> Tuple[float, dict]:
+        """
+        Check orthogonality of base functions using Hilbert space inner product.
+        
+        For a domain [a, b], the Hilbert space inner product is:
+            <f_i, f_j> ≈ Σ f_i(x_k) * f_j(x_k) * dx  (quadrature approximation)
+        
+        The normalized metric is:
+            max_{i ≠ j} |<f_i, f_j>| / (||f_i|| * ||f_j||)
+        
+        A value close to 0 indicates near-orthogonal bases (good).
+        A value close to 1 indicates significant overlap (problematic).
+        
+        Args:
+            X (Optional[np.ndarray]): Data points for evaluating orthogonality.
+                                     If None, uses training data.
+        
+        Returns:
+            Tuple[float, dict]:
+                - max_overlap: maximum normalized inner product between distinct bases
+                - stats dict with keys:
+                    - 'mean_overlap': mean of all pairwise normalized overlaps
+                    - 'min_overlap': minimum normalized overlap
+                    - 'max_overlap': maximum normalized overlap
+                    - 'gram_matrix': full Gram matrix (M x M) of normalized overlaps
+        """
+        if X is None:
+            X = self.X
+        
+        if len(self.terms) == 0:
+            return 0.0, {'mean_overlap': 0.0, 'min_overlap': 0.0, 'max_overlap': 0.0, 'gram_matrix': np.array([])}
+        
+        M = len(self.terms)
+        
+        # Compute base function evaluations
+        base_evals = []
+        for term in self.terms:
+            phi = term.base.eval(X, term.params)
+            base_evals.append(phi)
+        base_evals = np.array(base_evals)  # (M, N)
+        
+        # Compute norms (L2 norm over data points)
+        norms = np.linalg.norm(base_evals, axis=1)  # (M,)
+        norms = np.maximum(norms, 1e-12)  # Avoid division by zero
+        
+        # Compute Gram matrix (unnormalized inner products)
+        gram_raw = base_evals @ base_evals.T  # (M, M)
+        
+        # Normalize by outer product of norms
+        norm_outer = norms[:, None] * norms[None, :]
+        gram_normalized = np.abs(gram_raw) / norm_outer
+        
+        # Zero out diagonal for max computation (we only care about i ≠ j)
+        np.fill_diagonal(gram_normalized, 0.0)
+        
+        max_overlap = float(np.max(gram_normalized)) if gram_normalized.size > 0 else 0.0
+        
+        # Compute statistics on off-diagonal elements
+        off_diag_indices = np.triu_indices(M, k=1)
+        off_diag_values = gram_normalized[off_diag_indices]
+        
+        stats = {
+            'mean_overlap': float(np.mean(off_diag_values)) if len(off_diag_values) > 0 else 0.0,
+            'min_overlap': float(np.min(off_diag_values)) if len(off_diag_values) > 0 else 0.0,
+            'max_overlap': max_overlap,
+            'gram_matrix': gram_normalized,
+        }
+        
+        return max_overlap, stats
 
 
 
