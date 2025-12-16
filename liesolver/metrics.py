@@ -24,28 +24,28 @@ def record_history(model: LieSolver, step_type: str) -> None:
     model.history['step_type'].append(step_type)
 
 
-def condition_number(model: LieSolver, A: np.ndarray = None) -> float:
+def condition_number(model: LieSolver, F: np.ndarray = None) -> float:
     """
-    Compute the condition number of A^T A (ratio of largest to smallest eigenvalue).
+    Compute the condition number of F^T F (ratio of largest to smallest eigenvalue).
     
     A low condition number (close to 1) indicates a well-conditioned system.
     A high condition number indicates numerical instability and potential ill-conditioning.
     
     Args:
         model (LieSolver): Model instance.
-        A (Optional[np.ndarray]): Design matrix. If None, uses current design matrix.
+        F (Optional[np.ndarray]): Feature matrix. If None, uses current feature matrix.
     
     Returns:
-        float: Condition number κ(A^T A) = λ_max / λ_min.
+        float: Condition number κ(F^T F) = λ_max / λ_min.
     """
-    if A is None:
-        A = model.feature_matrix(model.terms)
+    if F is None:
+        F = model.feature_matrix(model.terms)
     
-    if A.shape[1] == 0:
+    if F.shape[1] == 0:
         return np.inf
     
-    AtA = A.T @ A
-    eigvals = np.linalg.eigvalsh(AtA)
+    FtF = F.T @ F
+    eigvals = np.linalg.eigvalsh(FtF)
     eigvals = np.abs(eigvals[eigvals > 1e-15])  # Filter near-zero eigenvalues
     
     if len(eigvals) == 0:
@@ -54,34 +54,34 @@ def condition_number(model: LieSolver, A: np.ndarray = None) -> float:
     return float(np.max(eigvals) / np.min(eigvals))
 
 
-def matrix_rank(model: LieSolver, A: np.ndarray = None, tol: float = 1e-10) -> int:
+def matrix_rank(model: LieSolver, F: np.ndarray = None, tol: float = 1e-10) -> int:
     """
-    Compute the numerical rank of the design matrix A.
+    Compute the numerical rank of the feature matrix F.
     
-    A full rank matrix has rank equal to min(n_samples, n_features).
+    A full rank matrix has rank equal to min(L, M).
     Rank deficiency indicates linear dependence among base functions.
     
     Args:
         model (LieSolver): Model instance.
-        A (Optional[np.ndarray]): Design matrix. If None, uses current design matrix.
+        F (Optional[np.ndarray]): Feature matrix. If None, uses current feature matrix.
         tol (float): Threshold for considering singular values as non-zero.
     
     Returns:
-        int: Numerical rank of A.
+        int: Numerical rank of F.
     """
-    if A is None:
-        A = model.feature_matrix(model.terms)
+    if F is None:
+        F = model.feature_matrix(model.terms)
     
-    if A.shape[1] == 0:
+    if F.shape[1] == 0:
         return 0
     
-    _, s, _ = np.linalg.svd(A, full_matrices=False)
+    _, s, _ = np.linalg.svd(F, full_matrices=False)
     return int(np.sum(s > tol))
 
 
-def eigenvalue_distribution(model: LieSolver, A: np.ndarray = None) -> Tuple[np.ndarray, dict]:
+def eigenvalue_distribution(model: LieSolver, F: np.ndarray = None) -> Tuple[np.ndarray, dict]:
     """
-    Compute eigenvalues of A^T A and statistics on their distribution.
+    Compute eigenvalues of F^T F and statistics on their distribution.
     
     For a well-conditioned problem with orthogonal bases, eigenvalues should be
     clustered and relatively uniform. High variance in eigenvalues indicates
@@ -89,7 +89,7 @@ def eigenvalue_distribution(model: LieSolver, A: np.ndarray = None) -> Tuple[np.
     
     Args:
         model (LieSolver): Model instance.
-        A (Optional[np.ndarray]): Design matrix. If None, uses current design matrix.
+        F (Optional[np.ndarray]): Feature matrix. If None, uses current feature matrix.
     
     Returns:
         Tuple[np.ndarray, dict]: 
@@ -101,14 +101,14 @@ def eigenvalue_distribution(model: LieSolver, A: np.ndarray = None) -> Tuple[np.
                 - 'max': maximum eigenvalue
                 - 'ratio_max_min': ratio of max to min (condition number)
     """
-    if A is None:
-        A = model.feature_matrix(model.terms)
+    if F is None:
+        F = model.feature_matrix(model.terms)
     
-    if A.shape[1] == 0:
+    if F.shape[1] == 0:
         return np.array([]), {'mean': np.nan, 'std': np.nan, 'min': np.nan, 'max': np.nan, 'ratio_max_min': np.inf}
     
-    AtA = A.T @ A
-    eigvals = np.linalg.eigvalsh(AtA)
+    FtF = F.T @ F
+    eigvals = np.linalg.eigvalsh(FtF)
     eigvals = np.sort(eigvals)[::-1]  # Sort descending
     eigvals = eigvals[eigvals > 1e-15]  # Filter near-zero eigenvalues
     
@@ -166,7 +166,7 @@ def base_orthogonality(model: LieSolver, X: np.ndarray = None) -> Tuple[float, d
     for term in model.terms:
         phi = term.base.eval(X, term.params)
         base_evals.append(phi)
-    base_evals = np.array(base_evals)  # (M, N)
+    base_evals = np.array(base_evals)  # (M, L)
     
     # Compute norms (L2 norm over data points)
     norms = np.linalg.norm(base_evals, axis=1)  # (M,)
