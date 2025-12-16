@@ -46,10 +46,10 @@ class Trainer:
 
     def _print_metrics(self):
         """Print concise analysis metrics after refinement (1-2 lines max)."""
-        A = self.model.feature_matrix(self.model.terms)
-        cond = self.model.condition_number(A)
-        rank = self.model.matrix_rank(A)
-        expected_rank = min(A.shape)
+        F = self.model.feature_matrix(self.model.terms)
+        cond = self.model.condition_number(F)
+        rank = self.model.matrix_rank(F)
+        expected_rank = min(F.shape)
         max_overlap, _ = self.model.base_orthogonality(self.data.train_x)
         
         # Format: κ(ATA)=X.XXe±XX rank=M/N ortho=X.XXe±XX
