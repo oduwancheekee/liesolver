@@ -84,7 +84,7 @@ def solve_icbc(icbc: Mapping[str, sp.Expr] | sp.Expr,
 
     Args:
         icbc: {'u0': Expr} or u0 Expr
-        geom: {'x_min':0.0,'x_max':1.0,'t_min':0.0} (x_max also accepts legacy 'x_end')
+        geom: {'x_min':0.0,'x_max':1.0,'t_min':0.0}
         phys: {'alpha':1.0}
         res:  M (default 100)
 

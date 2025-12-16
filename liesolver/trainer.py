@@ -41,11 +41,12 @@ class Trainer:
             bases=bases,
             ridge=1e-1,
             sobol_seed=self.seed,
+            track_history=False,
         )
 
     def _print_metrics(self):
         """Print concise analysis metrics after refinement (1-2 lines max)."""
-        A = self.model.design_matrix(self.model.terms)
+        A = self.model.feature_matrix(self.model.terms)
         cond = self.model.condition_number(A)
         rank = self.model.matrix_rank(A)
         expected_rank = min(A.shape)
