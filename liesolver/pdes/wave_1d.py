@@ -82,10 +82,18 @@ def solve_icbc(icbc: Mapping[str, sp.Expr] | sp.Expr,
         u0_expr, ut0_expr = icbc, None
 
     xi = x_min + (np.arange(1, M + 1) * a) / (M + 1)
-    f_samp = np.asarray(sp.lambdify(x, u0_expr, "numpy")(xi), dtype=float)
-    g_samp = np.zeros_like(f_samp) if ut0_expr is None else np.asarray(
-        sp.lambdify(x, ut0_expr, "numpy")(xi), dtype=float
-    )
+
+    if u0_expr is None or u0_expr == 0 or (isinstance(u0_expr, sp.Expr) and u0_expr.is_zero):
+        f_samp = np.zeros(M)
+    else:
+        f_val = sp.lambdify(x, u0_expr, "numpy")(xi)
+        f_samp = np.full(M, f_val) if np.isscalar(f_val) else np.asarray(f_val, dtype=float)
+    
+    if ut0_expr is None or ut0_expr == 0 or (isinstance(ut0_expr, sp.Expr) and ut0_expr.is_zero):
+        g_samp = np.zeros_like(f_samp)
+    else:
+        g_val = sp.lambdify(x, ut0_expr, "numpy")(xi)
+        g_samp = np.full_like(f_samp, g_val) if np.isscalar(g_val) else np.asarray(g_val, dtype=float)
 
     F = dst(f_samp, type=1, norm="ortho")
     G = dst(g_samp, type=1, norm="ortho")

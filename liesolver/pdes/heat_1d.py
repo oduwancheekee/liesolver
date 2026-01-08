@@ -20,9 +20,6 @@ def scale_u(expr: sp.Expr, eps):
 def scale_xt(expr: sp.Expr, eps):
     return expr.subs({x: eps * x, t: eps**2 * t})
 
-def galilean(expr: sp.Expr, eps):
-    return sp.exp(-eps * x + eps**2 * t) * expr.subs(x, x - 2*eps*t)
-
 def diffusion(expr: sp.Expr, eps):
     denom = 1 + 4 * eps * t
     factor = 1 / sp.sqrt(denom)
@@ -30,170 +27,118 @@ def diffusion(expr: sp.Expr, eps):
     return factor * exp_part * expr.subs({x: x/denom, t: t/denom})
 
 trafos: list[Transformation] = [
-    Transformation(kernel=shift_x,
-                   idx=1,
-                   param_bounds=[0, 1]
-                   ),
-    Transformation(kernel=shift_t,
-                   idx=2,
-                   param_bounds=[-10, 10],
-                   ),
-    Transformation(kernel=scale_u,
-                   idx=3,
-                   param_bounds=[0, 10],
-                   ),
-    Transformation(kernel=scale_xt,
-                   idx=4,
-                   param_bounds=[0, 100],
-                   ),
-    Transformation(kernel=galilean,
-                   idx=5,
-                   param_bounds=[-1, 1],
-                   ),
-    Transformation(kernel=diffusion,
-                   idx=6,
-                   param_bounds=[1e-1, 1e6],
-                   sample='log'
-                   ),
+    Transformation(kernel=shift_x, idx=1, param_bounds=[0, 1]),
+    Transformation(kernel=shift_t, idx=2, param_bounds=[-10, 10]),
+    Transformation(kernel=scale_u, idx=3, param_bounds=[0, 10]),
+    Transformation(kernel=scale_xt, idx=4, param_bounds=[0, 100]),
+    Transformation(kernel=diffusion, idx=6, param_bounds=[1e-1, 1e6], sample='log'),
 ]
 
-icbcs = {
-    "poly": {'u0': x**2 + x**3 - x**5 + x**7},
-    "gauss": {'u0': sp.exp(-5 * (x - 0.5) ** 2)},
-    # "asym_gauss": {'u0': sp.exp(-3 * (x) ** 2)},
-    "sine": {'u0': sp.sin(4*sp.pi*x)},
-    "sine_mix": {'u0': 0.5*sp.sin(2*sp.pi*x) - 0.2*sp.sin(4*sp.pi*x)+ 0.7*sp.sin(12*sp.pi*x)},
-    "step": {'u0': 0.5 * (sp.tanh(500 * (x - 0.4)) - sp.tanh(500 * (x - 0.6)))},
-}
 
-
-def solve_icbc(icbc: Mapping[str, sp.Expr] | sp.Expr,
+def solve_icbc(icbc: Mapping[str, sp.Expr],
                geom: Mapping[str, float] | None = None,
                phys: Mapping[str, float] | None = None,
-               res: int | Sequence[int] = 100
-               ) -> sp.Expr:
+               res: int | Sequence[int] = 100) -> sp.Expr:
+    """1D heat equation: u_t = alpha * u_xx with general Dirichlet BCs.
+    
+    IC: u(x, t_min) = u0(x)
+    BC: u(x_min, t) = bL(t), u(x_max, t) = bR(t)
+    
+    Uses time-dependent lift: w(x,t) = bL(t) + (bR(t) - bL(t)) * (x - x_min) / a
+    Then v = u - w satisfies homogeneous Dirichlet BCs.
     """
-    1D heat equation: u_t = alpha * u_xx on (x_min, x_max)
-    IC at t = t_min: u(x, t_min) = u0(x)
-    BC: Dirichlet constant u(x_min, t) = u0(x_min), u(x_max, t) = u0(x_max)
-
-    Method: lift u0 by w(x) to homogeneous Dirichlet, project v0=u0-w onto sine modes
-            via orthonormal DST-I, assemble M-mode series:
-            u(x,t) = w(x) + Σ A_m e^{-alpha (mπ/a)^2 (t - t_min)} sin(mπ (x - x_min)/a)
-            where a = x_max - x_min.
-
-    Args:
-        icbc: {'u0': Expr} or u0 Expr
-        geom: {'x_min':0.0,'x_max':1.0,'t_min':0.0}
-        phys: {'alpha':1.0}
-        res:  M (default 100)
-
-    Returns:
-        SymPy Expr u(x,t)
-    """
-    x_min = 0.0 if geom is None else float(geom.get("x_min", 0.0))
-    x_max = 1.0 if geom is None else float(geom.get("x_max", 1.0))
-    t_min = 0.0 if geom is None else float(geom.get("t_min", 0.0))
-    alpha = 1.0 if phys is None else float(phys.get("alpha", 1.0))
+    x_min = geom.get("x_min", 0.0) if geom else 0.0
+    x_max = geom.get("x_max", 1.0) if geom else 1.0
+    t_min = geom.get("t_min", 0.0) if geom else 0.0
+    alpha = phys.get("alpha", 1.0) if phys else 1.0
     M = res if isinstance(res, int) else int(res[0])
     a = x_max - x_min
-    u0_expr = icbc.get("u0") if isinstance(icbc, Mapping) else icbc
-
-    bL = float(u0_expr.subs(x, x_min))
-    bR = float(u0_expr.subs(x, x_max))
-    w = bL + (bR - bL) * (x - x_min) / a
-    v0_expr = sp.simplify(u0_expr - w)
-
+    
+    u0_expr = icbc.get("u0", sp.Integer(0))
+    
+    # BC expressions (may depend on t)
+    bL_expr = icbc.get("bL")
+    bR_expr = icbc.get("bR")
+    
+    # If BCs not specified, derive from u0 at boundaries (constant BCs)
+    if bL_expr is None:
+        bL_expr = u0_expr.subs(x, x_min) if not u0_expr.is_zero else sp.Integer(0)
+    if bR_expr is None:
+        bR_expr = u0_expr.subs(x, x_max) if not u0_expr.is_zero else sp.Integer(0)
+    
+    # Lift function: w(x,t) = bL(t) + (bR(t) - bL(t)) * (x - x_min) / a
+    w = bL_expr + (bR_expr - bL_expr) * (x - x_min) / a
+    
+    # v0 = u0 - w(x, t_min)
+    w_at_t0 = w.subs(t, t_min)
+    v0_expr = sp.simplify(u0_expr - w_at_t0)
+    
+    # Source term from lift: f(x,t) = -w_t + alpha * w_xx
+    w_t = sp.diff(w, t)
+    w_xx = sp.diff(w, x, 2)
+    source = -w_t + alpha * w_xx  # This should be 0 for linear-in-x lift with constant BCs
+    
+    # Project v0 onto sine modes
     xi = x_min + (np.arange(1, M + 1) * a) / (M + 1)
     v0_samp = np.asarray(sp.lambdify(x, v0_expr, "numpy")(xi), dtype=float)
     F = dst(v0_samp, type=1, norm="ortho")
     scale = np.sqrt(2.0 / (M + 1))
     
+    # Homogeneous solution: v(x,t) = sum_m A_m * exp(-alpha*k_m^2*(t-t_min)) * sin(k_m*(x-x_min))
     u_expr = w
     for m in range(1, M + 1):
         k = m * np.pi / a
         A_m = float(scale * F[m - 1])
-        u_expr += A_m * sp.exp(-alpha * k * k * (t - t_min)) * sp.sin(m * sp.pi * (x - x_min) / a)
+        u_expr += A_m * sp.exp(-alpha * k**2 * (t - t_min)) * sp.sin(m * sp.pi * (x - x_min) / a)
+    
     return u_expr
 
 
 def get_pde_residual(u_expr: sp.Expr,
-                geom: Mapping[str, float] | None = None,
-                phys: Mapping[str, float] | None = None,
-                res: int | Sequence[int] = 100
-                ) -> dict:
-    """
-    Heat 1d PDE residual: r(x,t) = u_t - alpha*u_xx on (x_min,x_max) x (t_min,t_max)
-
-    Args:
-        geom: {'x_min':0.0,'x_max':1.0,'t_min':0.0,'t_max':1.0}
-        phys: {'alpha':1.0}
-        res: N or [Nx, Nt] (sampling for MSE)
-    Returns:
-        {'MSE':..., 'L2':..., 'Linf':...}
-    """
-    x_min = 0.0 if geom is None else float(geom.get("x_min", 0.0))
-    x_max = 1.0 if geom is None else float(geom.get("x_max", 1.0))
-    t_min = 0.0 if geom is None else float(geom.get("t_min", 0.0))
-    t_max = 1.0 if geom is None else float(geom.get("t_max", 1.0))
-    alpha = 1.0 if phys is None else float(phys.get("alpha", 1.0))
+                     geom: Mapping[str, float] | None = None,
+                     phys: Mapping[str, float] | None = None,
+                     res: int | Sequence[int] = 100) -> dict:
+    """PDE residual: r = u_t - alpha*u_xx."""
+    x_min, x_max = (geom or {}).get("x_min", 0.0), (geom or {}).get("x_max", 1.0)
+    t_min, t_max = (geom or {}).get("t_min", 0.0), (geom or {}).get("t_max", 1.0)
+    alpha = (phys or {}).get("alpha", 1.0)
     Nx, Nt = (res, res) if isinstance(res, int) else (int(res[0]), int(res[1]))
 
     r_expr = sp.diff(u_expr, t) - alpha * sp.diff(u_expr, x, 2)
     rf = sp.lambdify((x, t), r_expr, "numpy")
-
-    xi = np.linspace(x_min, x_max, Nx)
-    ti = np.linspace(t_min, t_max, Nt)
-    X, T = np.meshgrid(xi, ti, indexing="xy")
+    X, T = np.meshgrid(np.linspace(x_min, x_max, Nx), np.linspace(t_min, t_max, Nt), indexing="xy")
     R = rf(X, T)
+    return {"MSE": float(np.mean(R**2)), "Linf": float(np.max(np.abs(R)))}
 
-    dx = (x_max - x_min) / max(Nx - 1, 1)
-    dt = (t_max - t_min) / max(Nt - 1, 1)
-    return {
-        "MSE": float(np.mean(R**2)),
-        "L2": float(np.sqrt(np.sum(R**2) * dx * dt)),
-        "Linf": float(np.max(np.abs(R))),
-    }
 
 def get_icbc_error(u_expr: sp.Expr,
-               icbc: Mapping[str, sp.Expr] | sp.Expr,
-               geom: Mapping[str, float] | None = None,
-               res: int | Sequence[int] | None = 100) -> dict:
-    """
-    IC/BC MSE for heat 1d PDE
-    IC at t = t_min: u(x, t_min) = u0(x)
-    BC: u(x_min,t)=u0(x_min), u(x_max,t)=u0(x_max)
-
-    Inputs:
-        icbc: {'u0':Expr} or u0 Expr
-        geom: {'x_min':0.0,'x_max':1.0,'t_min':0.0,'t_max':1.0}
-        res:  N or [Nx, Nt] (sampling)
-    Returns:
-        {'IC_MSE':..., 'BC0_MSE':..., 'BC1_MSE':..., 'MSE':...}
-    """
-    x_min = 0.0 if geom is None else float(geom.get("x_min", 0.0))
-    x_max = 1.0 if geom is None else float(geom.get("x_max", 1.0))
-    t_min = 0.0 if geom is None else float(geom.get("t_min", 0.0))
-    t_max = 1.0 if geom is None else float(geom.get("t_max", 1.0))
+                   icbc: Mapping[str, sp.Expr],
+                   geom: Mapping[str, float] | None = None,
+                   res: int | Sequence[int] = 100) -> dict:
+    """IC/BC error for heat equation."""
+    x_min, x_max = (geom or {}).get("x_min", 0.0), (geom or {}).get("x_max", 1.0)
+    t_min, t_max = (geom or {}).get("t_min", 0.0), (geom or {}).get("t_max", 1.0)
     Nx, Nt = (res, res) if isinstance(res, int) else (int(res[0]), int(res[1]))
 
-    u0_expr = icbc.get("u0") if isinstance(icbc, Mapping) else icbc
+    u0_expr = icbc.get("u0", sp.Integer(0))
+    bL_expr = icbc.get("bL", u0_expr.subs(x, x_min))
+    bR_expr = icbc.get("bR", u0_expr.subs(x, x_max))
+    
     u_fn = sp.lambdify((x, t), u_expr, "numpy")
-    f_fn = sp.lambdify((x,), u0_expr, "numpy")
-    bL, bR = float(u0_expr.subs(x, x_min)), float(u0_expr.subs(x, x_max))
+    f_fn = sp.lambdify(x, u0_expr, "numpy")
+    bL_fn = sp.lambdify(t, bL_expr, "numpy") if not bL_expr.is_number else lambda _: float(bL_expr)
+    bR_fn = sp.lambdify(t, bR_expr, "numpy") if not bR_expr.is_number else lambda _: float(bR_expr)
 
     xi = np.linspace(x_min, x_max, Nx)
     ti = np.linspace(t_min, t_max, Nt)
 
     ic_err = u_fn(xi, t_min) - f_fn(xi)
-    bc0_err = u_fn(x_min, ti) - bL
-    bca_err = u_fn(x_max, ti) - bR
+    bc0_err = u_fn(x_min, ti) - bL_fn(ti)
+    bca_err = u_fn(x_max, ti) - bR_fn(ti)
 
-    n_all = xi.size + ti.size + ti.size
-    total = (np.sum(ic_err**2) + np.sum(bc0_err**2) + np.sum(bca_err**2)) / n_all
     return {
         "IC_MSE": float(np.mean(ic_err**2)),
         "BC0_MSE": float(np.mean(bc0_err**2)),
         "BC1_MSE": float(np.mean(bca_err**2)),
-        "MSE": float(total),
+        "MSE": float((np.sum(ic_err**2) + np.sum(bc0_err**2) + np.sum(bca_err**2)) / (len(xi) + 2*len(ti))),
     }

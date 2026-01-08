@@ -1,29 +1,54 @@
 pde: wave_1d
-experiment_name: wave-step-g20_10-b5_4-mse5-seed0_lm
+experiment_name: wave-step-g20_10-b5_4-mse4-seed0
 seed: 0
 
 data: 
-  icbc_name: step
-  # icbc_expr: sin(2*pi*x)
-  res: 600  
+  res: 100  
   num_ic: 1500
   num_bc: 2500
   num_domain: 10_000
   range_dim:
-  - [0, 1]
-  - [0, 1] 
+    x: [0, 1]
+    t: [0, 1]
   refresh: 0
+  constraints:
+    # - expr: sinc(10 * 2*pi*(x-0.3))
+    # - expr: 0.5 * (tanh(50 * (x - 0.4)) - tanh(50 * (x - 0.6)))
+    - expr: 0
+      loc: [t, 0]  # t = t_min (initial condition)
+      deriv_order: [0, 0]  # u value
+      weight: 1.0
+      num_samples: 1500
+      name: IC_u0
+    # - expr: 0
+    # - expr: sin(2*pi*x)  # non-zero velocity IC
+    - expr: 0.5 * (tanh(50 * (x - 0.4)) - tanh(50 * (x - 0.6)))
+      loc: [t, 0]
+      deriv_order: [0, 1]  # du/dt
+      weight: 1.0
+      num_samples: 1500
+      name: IC_ut0
+    - expr: 0  # Dirichlet BC at x=0
+      loc: [x, 0]
+      num_samples: 1250
+      name: BC_left
+    - expr: 0  # Dirichlet BC at x=1
+      loc: [x, 1]
+      num_samples: 1250
+      name: BC_right
 
 base: 
-  - T4(0,100) T1(0,3.14) sin(x) cos(t)
-  - T1(-1,2) T4(0,1000) exp(-(x+t)**2) + exp(-(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
+  - T4(0,100) T1(0,3.14) sin(x+t)
+  - T4(0,100) T1(0,3.14) sin(x-t)
+  - T1(-1,2) T4(0,1000) exp(-(x+t)**2)
+  - T1(-1,2) T4(0,1000) exp(-(x-t)**2)
   # - T1(-1, 2) T4 1/(1+(x+t)**2) + 1/(1+(x-t)**2) # T1(range_dim[0] + [-c*dt, +c*dt])
   # - T1(-1, 2) T4 exp(-(x+t)**2) cos(x+t) + exp(-(x-t)**2) cos(x-t) 
   # - x cos(x) sin(t) + t sin(x) cos(t) # and other parameter-derivatives of fourier modes 
 
 fit:
-  mse_tol: 9e-6
-  max_terms: 120 
+  mse_tol: 9e-5
+  max_terms: 30 
   pool_size: 1000
 
   global_every: 20

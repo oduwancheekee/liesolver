@@ -3,11 +3,95 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
-from typing import Union
+from typing import Union, Optional
 from pathlib import Path
+from abc import ABC, abstractmethod
 
 from .model import LieSolver
 from .dataloader import DataLoader
+
+
+class MetricPlotter(ABC):
+    """Base class for plotting tracked metrics.
+    
+    Users can inherit from this class to define custom visualizations
+    for metrics tracked during training.
+    
+    Example:
+        class ConditionNumberPlotter(MetricPlotter):
+            def plot(self, fit_state, metric_name='condition_number', 
+                    filepath=None, **kwargs):
+                values = fit_state.custom_metrics[metric_name]
+                steps = fit_state.nterms_hist
+                
+                plt.figure(figsize=(8, 5))
+                plt.plot(steps, values, marker='o')
+                plt.xlabel('Number of Terms')
+                plt.ylabel('Condition Number')
+                plt.yscale('log')
+                plt.title('Condition Number Evolution')
+                
+                if filepath:
+                    plt.savefig(filepath, dpi=300)
+                plt.close()
+    """
+    
+    @abstractmethod
+    def plot(self, fit_state, metric_name: str, filepath: Optional[Union[str, Path]] = None, **kwargs):
+        """Plot metric values from fit_state.
+        
+        Args:
+            fit_state (FitState): FitState instance with tracked metrics.
+            metric_name (str): Name of the metric to plot.
+            filepath (Optional[Union[str, Path]]): Path to save the figure.
+            **kwargs: Additional plotting parameters.
+        """
+        raise NotImplementedError("Subclasses must implement plot()")
+
+
+class SimpleMetricPlotter(MetricPlotter):
+    """Simple line plot for any tracked metric."""
+    
+    def plot(self, fit_state, metric_name: str, 
+            filepath: Optional[Union[str, Path]] = None,
+            figsize=(8, 5), 
+            ylabel: Optional[str] = None,
+            title: Optional[str] = None,
+            log_scale: bool = False,
+            **kwargs):
+        """Plot metric values as a simple line plot.
+        
+        Args:
+            fit_state (FitState): FitState instance with tracked metrics.
+            metric_name (str): Name of the metric to plot.
+            filepath (Optional[Union[str, Path]]): Path to save the figure.
+            figsize (tuple): Figure size. Default (8, 5).
+            ylabel (Optional[str]): Y-axis label. Defaults to metric_name.
+            title (Optional[str]): Plot title. Defaults to metric_name evolution.
+            log_scale (bool): Use log scale for y-axis. Default False.
+            **kwargs: Additional parameters passed to plt.plot().
+        """
+        if metric_name not in fit_state.metrics_history:
+            raise ValueError(f"Metric '{metric_name}' not found in fit_state.metrics_history")
+        
+        values = fit_state.metrics_history[metric_name]
+        steps = fit_state.nterms_hist[:len(values)]
+        
+        plt.figure(figsize=figsize)
+        plt.plot(steps, values, marker='o', **kwargs)
+        plt.xlabel(r"N$_{\text{terms}}$")
+        plt.ylabel(ylabel or metric_name)
+        if log_scale:
+            plt.yscale('log')
+        plt.title(title or f'{metric_name} evolution')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        if filepath:
+            plt.savefig(filepath, dpi=300)
+        else:
+            plt.show()
+        plt.close()
 
 
 def sorted_idx(arr, dim, val, sort_dim):
@@ -160,3 +244,124 @@ def plot_fit_history(state, save_to=None):
     else:
         plt.show()
     plt.close()
+
+
+def plot_amplitude_evolution(fit_state, figsize=(12, 6), margin_fraction=0.5, filepath: Union[str, Path, None] = None):
+    """Plot amplitude evolution across fitting history with relative amplitudes.
+    
+    Visualizes how each term's amplitude (normalized by total) evolves throughout
+    the fitting process. Each term is shown at a fixed x-position, with points
+    scattered horizontally for visibility. Transparency indicates age (older = more
+    transparent), color indicates final state (red = final, black = history).
+    
+    Args:
+        fit_state (FitState): FitState instance from trainer.
+        figsize (tuple): Figure size as (width, height). Default (12, 6).
+        margin_fraction (float): Margin as fraction of y-range from percentiles.
+                                Default 0.5 (50% on each side).
+        filepath (str | Path, optional): Path to save the figure.
+    """
+    from matplotlib.lines import Line2D
+    
+    history_amplitudes = fit_state.amplitudes_hist
+    history_steps = fit_state.step_type_hist
+    
+    if not history_amplitudes:
+        print("No history available")
+        return
+    
+    # Find max number of terms across all steps
+    max_terms = max(len(a) for a in history_amplitudes)
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Collect all y_values for statistics
+    all_y_values = []
+    
+    # For each term (amplitude position)
+    for term_idx in range(max_terms):
+        x_positions = []
+        y_values = []
+        alphas = []
+        
+        # For each step in history
+        for step_idx, amplitudes in enumerate(history_amplitudes):
+            # Only plot if this term exists at this step
+            if term_idx < len(amplitudes):
+                x_positions.append(term_idx)
+                # Normalize amplitude by sum of absolute amplitudes at this step
+                amplitude_sum = np.sum(np.abs(amplitudes))
+                normalized_amp = amplitudes[term_idx] / amplitude_sum if amplitude_sum > 0 else 0
+                y_values.append(normalized_amp)
+                all_y_values.append(normalized_amp)
+                # Transparency increases with step (older = more transparent)
+                alphas.append(step_idx / len(history_amplitudes) / 2)
+        alphas[-1] = 1.0
+        
+        # Plot all points for this term with varying transparency
+        for i, (x, y, alpha) in enumerate(zip(x_positions, y_values, alphas)):
+            # Final point (current model) in red, others in black
+            is_final = (i == len(x_positions) - 1)
+            
+            color = 'red' if is_final else 'black'
+            ax.scatter(x - 0.33 + (i+1)/len(x_positions)/3, y, s=50, alpha=alpha, 
+                      color=color, edgecolors='none')
+    
+    # Calculate ylim based on percentiles to exclude outliers
+    all_y_values = np.array(all_y_values)
+    q5, q95 = np.percentile(all_y_values, [5, 95])
+    y_range = q95 - q5
+    margin = margin_fraction * y_range
+    y_min = q5 - margin
+    y_max = q95 + margin
+    ax.set_ylim(y_min, y_max)
+    
+    # Set ticks at all integer positions for grid lines
+    all_ticks = range(max_terms)
+    ax.set_xticks(all_ticks)
+    
+    # Determine which ticks to label to avoid overlap
+    step = max(1, max_terms // 10)
+    ax.set_xticklabels([str(i) if i % step == 0 else '' for i in all_ticks])
+    
+    ax.grid(True, axis='x', alpha=0.3)
+    ax.axhline(y=0, alpha=0.3, color='black', linewidth=0.3)
+    
+    # Add legend
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=8, label='history'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='black', alpha=0.3, markersize=8, label='older history'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8, label='final')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
+    
+    ax.set_xlabel('Term Index (Amplitude Order)', fontsize=12)
+    ax.set_ylabel('Relative Amplitude (fraction of total)', fontsize=12)
+    ax.set_title('Relative Amplitude Evolution Across Fitting History', fontsize=13)
+    
+    plt.tight_layout()
+    if filepath:
+        plt.savefig(filepath, dpi=300)
+    else:
+        plt.show()
+    plt.close()
+
+
+def plot_custom_metric(fit_state, metric_name: str, 
+                      filepath: Optional[Union[str, Path]] = None,
+                      plotter: Optional[MetricPlotter] = None,
+                      **kwargs):
+    """Convenience function to plot a custom metric.
+    
+    Args:
+        fit_state (FitState): FitState instance with tracked metrics.
+        metric_name (str): Name of the metric to plot.
+        filepath (Optional[Union[str, Path]]): Path to save the figure.
+        plotter (Optional[MetricPlotter]): Custom plotter instance. 
+                                          Defaults to SimpleMetricPlotter.
+        **kwargs: Additional parameters passed to the plotter.
+    """
+    if plotter is None:
+        plotter = SimpleMetricPlotter()
+    
+    plotter.plot(fit_state, metric_name, filepath=filepath, **kwargs)

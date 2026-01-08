@@ -9,6 +9,8 @@ from scipy.optimize import least_squares
 import re
 from pathlib import Path
 
+from .constraints import Constraint, ConstraintSet
+
 class Transformation:
     """
     Single-parameter SymPy transformation with bounds and sampling mode.
@@ -91,17 +93,57 @@ class Base:
             self.param_sample.append(trafo.sample)
             self.expression = trafo(self.expression, param_sym)
 
-        self.f_np = sp.lambdify(self.coords_sym + self.params_sym, self.expression, modules="numpy")
+        self._f = sp.lambdify(self.coords_sym + self.params_sym, self.expression, modules="numpy")
         
         # Compile analytical Jacobian: ∂φ/∂θ_i for each parameter
-        self.jacobian_f_np = []
+        self._df_dtheta = []
         for param_sym in self.params_sym:
             deriv_expr = sp.diff(self.expression, param_sym)
             deriv_fn = sp.lambdify(self.coords_sym + self.params_sym, deriv_expr, modules="numpy")
-            self.jacobian_f_np.append(deriv_fn)
+            self._df_dtheta.append(deriv_fn)
+        
+        # Cache for coordinate derivative lambdas: {deriv_order: lambda}
+        self._df_dcoord: dict = {}
 
-    def eval(self, X: np.ndarray, params: np.ndarray):
-        return self.f_np(*X.T, *params)
+    def _get_deriv_func(self, deriv_order: Tuple[int, ...]):
+        """Get or compile lambda for coordinate derivative.
+        
+        Args:
+            deriv_order: Derivative order per coordinate, e.g., (0, 1) for ∂/∂t.
+        
+        Returns:
+            Callable: Lambda function (coords..., params...) -> values.
+        """
+        if deriv_order in self._df_dcoord:
+            return self._df_dcoord[deriv_order]
+        
+        # Build derivative expression
+        expr = self.expression
+        for coord_idx, order in enumerate(deriv_order):
+            if order > 0:
+                expr = sp.diff(expr, self.coords_sym[coord_idx], order)
+        
+        # Compile and cache
+        func = sp.lambdify(self.coords_sym + self.params_sym, expr, modules="numpy")
+        self._df_dcoord[deriv_order] = func
+        return func
+
+    def eval(self, X: np.ndarray, params: np.ndarray, deriv_order: Optional[Tuple[int, ...]] = None) -> np.ndarray:
+        """Evaluate base function or its coordinate derivative at points.
+        
+        Args:
+            X: Input points, shape (n_samples, n_coords).
+            params: Parameter vector, shape (n_params,).
+            deriv_order: Derivative order per coordinate, e.g., (0, 1) for ∂/∂t.
+                None or (0, 0, ...) returns the function value.
+        
+        Returns:
+            np.ndarray: Values at X, shape (n_samples,).
+        """
+        if deriv_order is None or all(d == 0 for d in deriv_order):
+            return self._f(*X.T, *params)
+        func = self._get_deriv_func(deriv_order)
+        return func(*X.T, *params)
 
     def eval_jacobian(self, X: np.ndarray, params: np.ndarray) -> np.ndarray:
         """Evaluate analytical Jacobian ∂φ/∂θ at given points and parameters.
@@ -117,7 +159,7 @@ class Base:
         n_params = len(self.params_sym)
         jac = np.zeros((n_samples, n_params))
         
-        for i, deriv_fn in enumerate(self.jacobian_f_np):
+        for i, deriv_fn in enumerate(self._df_dtheta):
             jac[:, i] = deriv_fn(*X.T, *params)
         
         return jac
@@ -235,46 +277,31 @@ class LieSolver:
     """    
     def __init__(
             self,
-            X: np.ndarray,
-            Y: np.ndarray,
             bases: List[Base],
-            ridge=0.0,
-            sobol_seed=0,
-            track_history=False,
+            constraints: ConstraintSet,
+            ridge: float = 0.0,
+            sobol_seed: int = 0,
         ):
-        self.X = X.astype(np.float64)
-        self.Y = Y.astype(np.float64)
+        """Initialize LieSolver.
+        
+        Args:
+            bases: List of Base objects defining the function space.
+            constraints: ConstraintSet with IC/BC/derivative constraints.
+            ridge: Ridge regularization coefficient.
+            sobol_seed: Seed for Sobol sampling of parameters.
+        """
         self.bases = bases
+        self.constraints = constraints
         self.ridge = ridge
-        self.track_history = track_history
+        self.sobol_seed = sobol_seed
 
         self.terms: List[BaseTerm] = []
         self.amplitudes = np.array([])
         self.mse = np.inf
-        self.sobol_seed = sobol_seed
-        
-        # History tracking for fitting analysis
-        self.history = {
-            'amplitudes': [],      # List of amplitude vectors at each step
-            'term_params': [],     # List of term parameter snapshots at each step
-            'mse': [],             # MSE at each step
-            'n_terms': [],         # Number of terms at each step
-            'step_type': [],       # Type of step ('add', 'refine', 'remove', 'init')
-        }
 
     def __call__(self, X: np.ndarray):
         F = self.feature_matrix(self.terms, X)
         return F @ self.amplitudes
-
-    def _track_history(self, step_type: str) -> None:
-        """Record history if tracking is enabled.
-        
-        Args:
-            step_type (str): Type of step.
-        """
-        if self.track_history:
-            from .metrics import record_history
-            record_history(self, step_type)
 
     def save(self, folder: Path = None, filename = None) -> None:
         """Save model arrays and metadata to NPZ."""
@@ -284,51 +311,72 @@ class LieSolver:
             folder = Path.cwd()
         path = Path(folder) / filename
         
+        # Save constraint data
+        n_constraints = len(self.constraints.constraints)
+        constraint_x = [c.x for c in self.constraints.constraints]
+        constraint_y = [c.y for c in self.constraints.constraints]
+        constraint_deriv_order = [c.deriv_order for c in self.constraints.constraints]
+        constraint_weight = [c.weight for c in self.constraints.constraints]
+        constraint_name = [c.name for c in self.constraints.constraints]
+        
         save_dict = {
-            'X': self.X,
-            'Y': self.Y,
             'bases_str': [base.to_string() for base in self.bases],
             'bases_idx': [term.base_idx for term in self.terms],
             'theta': np.array([term.params for term in self.terms], dtype=object),
             'ridge': self.ridge,
             'sobol_seed': self.sobol_seed,
-            'track_history': self.track_history,
             'a': self.amplitudes,
             'mse': self.mse,
+            # Constraint data
+            'n_constraints': n_constraints,
+            'constraint_x': np.array(constraint_x, dtype=object),
+            'constraint_y': np.array(constraint_y, dtype=object),
+            'constraint_deriv_order': np.array(constraint_deriv_order, dtype=object),
+            'constraint_weight': np.array(constraint_weight),
+            'constraint_name': np.array(constraint_name, dtype=object),
         }
-        
-        # Only save history if tracking was enabled
-        if self.track_history:
-            save_dict['history_amplitudes'] = np.array(self.history['amplitudes'], dtype=object)
-            save_dict['history_term_params'] = np.array(self.history['term_params'], dtype=object)
-            save_dict['history_mse'] = np.array(self.history['mse'])
-            save_dict['history_n_terms'] = np.array(self.history['n_terms'])
-            save_dict['history_step_type'] = np.array(self.history['step_type'], dtype=object)
         
         np.savez_compressed(path, **save_dict)
 
     @classmethod
     def init_from_npz(cls, file, trafos, coords_sym):
+        
         data = np.load(file, allow_pickle=True)
         
-        # Restore track_history flag if available, otherwise infer from history presence
-        track_history = bool(np.asarray(data.get("track_history", "history_amplitudes" in data)).item())
+        # Rebuild constraints from saved data
+        n_constraints = int(data['n_constraints'])
+        constraint_x = data['constraint_x']
+        constraint_y = data['constraint_y']
+        constraint_deriv_order = data['constraint_deriv_order']
+        constraint_weight = data['constraint_weight']
+        constraint_name = data['constraint_name']
+        
+        constraints = ConstraintSet()
+        for i in range(n_constraints):
+            constraints.add(Constraint(
+                x=np.asarray(constraint_x[i]),
+                y=np.asarray(constraint_y[i]),
+                deriv_order=tuple(constraint_deriv_order[i]),
+                weight=float(constraint_weight[i]),
+                name=str(constraint_name[i]),
+            ))
         
         model = cls(
-            X=data["X"],
-            Y=data["Y"],
             bases=[Base.init_from_str(base_str, trafos, coords_sym) for base_str in data["bases_str"]],
+            constraints=constraints,
             ridge=float(np.asarray(data["ridge"]).item()),
             sobol_seed=int(np.asarray(data["sobol_seed"]).item()),
-            track_history=track_history,
         )
         bases_idx = data["bases_idx"]
         theta = data["theta"]
         for i, base_idx in enumerate(bases_idx):
             model.add_defined_term(int(base_idx), np.asarray(theta[i]))
-        F = model.feature_matrix(model.terms)
-        model.amplitudes = model.ls_amplitudes(F)
-        r = (F @ model.amplitudes - model.Y)
+        
+        # Rebuild amplitudes and MSE
+        F = model.stacked_feature_matrix(model.terms)
+        Y = model.stacked_targets()
+        model.amplitudes = model.ls_amplitudes(F, Y)
+        r = F @ model.amplitudes - Y
         model.mse = float(np.mean(r ** 2))
         
         # Load history if available
@@ -347,7 +395,6 @@ class LieSolver:
                         params=params,
                         base_idx=base_idx)
         self.terms.append(term)
-        self._track_history('add_defined_term')
     
     def remove_term(self, term_idx: int = -1):
         if not self.terms:
@@ -361,34 +408,74 @@ class LieSolver:
         removed = self.terms.pop(term_idx)
 
         if self.terms:
-            F = self.feature_matrix(self.terms)
-            self.amplitudes = self.ls_amplitudes(F)
-            r = F @ self.amplitudes - self.Y
+            F = self.stacked_feature_matrix(self.terms)
+            Y = self.stacked_targets()
+            self.amplitudes = self.ls_amplitudes(F, Y)
+            r = F @ self.amplitudes - Y
             self.mse = float(np.mean(r ** 2))
         else:
             self.amplitudes = np.zeros(0)
-            self.mse = float(np.mean(self.Y ** 2))
+            Y = self.stacked_targets()
+            self.mse = float(np.mean(Y ** 2))
         
-        self._track_history('remove_term')
         return removed
 
-    def feature_matrix(self, terms: List[BaseTerm], X: np.ndarray = None) -> np.ndarray:
-        if X is None:
-            X = self.X
+    def feature_matrix(self, terms: List[BaseTerm], X: np.ndarray) -> np.ndarray:
+        """Build feature matrix for given terms at points X."""
         cols = [term.base.eval(X, term.params) for term in terms]
         return np.stack(cols, axis=1)  # (L, M)
+    
+    def feature_matrix_derivative(
+        self, 
+        terms: List[BaseTerm], 
+        X: np.ndarray, 
+        deriv_order: Tuple[int, ...]
+    ) -> np.ndarray:
+        """Build feature matrix for derivative constraint.
+        
+        Args:
+            terms: List of BaseTerm objects.
+            X: Sample points, shape (N, dim).
+            deriv_order: Derivative order per coordinate.
+        
+        Returns:
+            np.ndarray: Feature matrix, shape (N, M).
+        """
+        if all(d == 0 for d in deriv_order):
+            return self.feature_matrix(terms, X)
+        cols = [term.base.eval(X, term.params, deriv_order) for term in terms]
+        return np.stack(cols, axis=1)
+    
+    def stacked_feature_matrix(self, terms: List[BaseTerm]) -> np.ndarray:
+        """Build stacked feature matrix for all constraints.
+        
+        Each constraint block is scaled by sqrt(weight).
+        
+        Returns:
+            np.ndarray: Stacked feature matrix, shape (total_samples, M).
+        """
+        if self.constraints is None or len(self.constraints) == 0:
+            return self.feature_matrix(terms)
+        
+        blocks = []
+        for c in self.constraints:
+            F_c = self.feature_matrix_derivative(terms, c.x, c.deriv_order)
+            blocks.append(np.sqrt(c.weight) * F_c)
+        return np.vstack(blocks)
+    
+    def stacked_targets(self) -> np.ndarray:
+        """Get stacked weighted target vector for all constraints."""
+        return self.constraints.get_stacked_targets()
 
-    def ls_amplitudes(self, F: np.ndarray, Y: np.ndarray = None) -> np.ndarray:
+    def ls_amplitudes(self, F: np.ndarray, Y: np.ndarray) -> np.ndarray:
         """
         Solve least squares for amplitudes.
         Args:
             F (np.ndarray): Design matrix (L, M).
-            Y (Optional[np.ndarray]): Targets (defaults to training Y).
+            Y (np.ndarray): Targets.
         Returns:
             np.ndarray: Amplitude vector (M,).
         """
-        if Y is None:
-            Y = self.Y
         if F.shape[1] == 0:
             return np.zeros(0)
         if self.ridge > 0.0:
@@ -402,43 +489,56 @@ class LieSolver:
 
     def add_best_term(self, pool_size: int = 1000):
         """Greedily add highest-scoring term against residual.
+        
         Args:
             pool_size (int): Number of parameter samples per base.
         Returns:
             float: Best cosine score.
         """
+        # Compute current residual
         if len(self.terms) == 0:
-            r = self.Y.copy()
+            r = self.stacked_targets()
         else:
-            F = self.feature_matrix(self.terms)
-            a = self.ls_amplitudes(F)
-            r = self.Y - F @ a
+            F = self.stacked_feature_matrix(self.terms)
+            Y_stacked = self.stacked_targets()
+            a = self.ls_amplitudes(F, Y_stacked)
+            r = Y_stacked - F @ a
+        
         norm_r = np.linalg.norm(r) + 1e-12
         best_score = -np.inf
         best_base = None
 
         for base_idx, base in enumerate(self.bases):
-            params_pool = base.sample_params(pool_size, self.sobol_seed)  # (pool_size, len(base.params))
+            params_pool = base.sample_params(pool_size, self.sobol_seed)
             for p in params_pool:
-                phi = base.eval(self.X, p)
+                # Evaluate candidate term across all constraints
+                phi_parts = []
+                for c in self.constraints:
+                    phi_c = base.eval(c.x, p, c.deriv_order)
+                    phi_parts.append(np.sqrt(c.weight) * phi_c)
+                phi = np.concatenate(phi_parts)
+                
                 norm_phi = np.linalg.norm(phi) + 1e-12
                 score = abs(np.dot(r, phi) / norm_phi / norm_r)
                 if score > best_score:
                     best_score = score
                     best_base = BaseTerm(base, p.copy(), base_idx)
+        
         const_score = abs(np.dot(r, np.ones_like(r)) / np.linalg.norm(np.ones_like(r)) / norm_r)
         if best_score < const_score:
             print(f'Add log: best score {best_score:.2e} is lower than constant score {const_score:.2e}')
         self.terms.append(best_base)
         
-        F = self.feature_matrix(self.terms)
-        self.amplitudes = self.ls_amplitudes(F)
-        r = (F @ self.amplitudes - self.Y)
+        # Recompute amplitudes and MSE
+        F = self.stacked_feature_matrix(self.terms)
+        Y_stacked = self.stacked_targets()
+        
+        self.amplitudes = self.ls_amplitudes(F, Y_stacked)
+        r = F @ self.amplitudes - Y_stacked
         mse = float(np.mean(r ** 2))
         if mse > self.mse:
             print('Add log: MSE worsened')
         self.mse = mse
-        self._track_history('add_best_term')
         return best_score
         
 
@@ -475,15 +575,29 @@ class LieSolver:
 
     def _residual_varpro(self, theta: np.ndarray, active_idx: List[int]) -> np.ndarray:
         """Compute residual using variable-projection with given theta.
-        Caches amplitudes for use by _jacobian_varpro."""
+        
+        Caches amplitudes for use by _jacobian_varpro.
+        """
         terms = [BaseTerm(term.base, term.params.copy()) for term in self.terms]
         self._unpack_theta(theta, terms, active_idx)
-        F = self.feature_matrix(terms)
-        a = self.ls_amplitudes(F)
-        self._cached_F = F  # Cache for jacobian computation
+        
+        F = self._stacked_feature_matrix_for_terms(terms)
+        Y = self.stacked_targets()
+        
+        a = self.ls_amplitudes(F, Y)
+        self._cached_F = F
         self._cached_a = a
         self._cached_terms = terms
-        return (F @ a - self.Y)
+        self._cached_Y = Y
+        return F @ a - Y
+    
+    def _stacked_feature_matrix_for_terms(self, terms: List[BaseTerm]) -> np.ndarray:
+        """Build stacked feature matrix for given terms (not self.terms)."""
+        blocks = []
+        for c in self.constraints:
+            F_c = self.feature_matrix_derivative(terms, c.x, c.deriv_order)
+            blocks.append(np.sqrt(c.weight) * F_c)
+        return np.vstack(blocks)
     
     def _jacobian_varpro(self, theta: np.ndarray, active_idx: List[int]) -> np.ndarray:
         """Analytical Jacobian of variable-projection residual: ∂r/∂θ.
@@ -503,6 +617,7 @@ class LieSolver:
         F = self._cached_F
         a = self._cached_a
         terms = self._cached_terms
+        Y = self._cached_Y
         L = F.shape[0]
         
         # Determine active indices
@@ -510,29 +625,36 @@ class LieSolver:
             active_idx = list(range(len(terms)))
         
         # Compute ∂F/∂θ analytically: (L, Ka) where Ka = number of active params
+        # Build Jacobian for each constraint block
         dF_dtheta_list = []
-        param_idx_to_term_idx = {}  # Maps position in theta to term index
+        param_idx_to_term_idx = {}
         param_offset = 0
+        
         for term_idx in active_idx:
             term = terms[term_idx]
-            jac_term = term.base.eval_jacobian(self.X, term.params)  # (L, K_term)
+            jac_blocks = []
+            for c in self.constraints:
+                # TODO: implement eval_jacobian with deriv_order for full analytical Jacobian
+                # For now, use numerical differentiation for derivative constraints
+                jac_c = term.base.eval_jacobian(c.x, term.params)
+                jac_blocks.append(np.sqrt(c.weight) * jac_c)
+            jac_term = np.vstack(jac_blocks)
             dF_dtheta_list.append(jac_term)
             K_term = jac_term.shape[1]
             for local_j in range(K_term):
                 param_idx_to_term_idx[param_offset + local_j] = term_idx
             param_offset += K_term
         
-        dF_dtheta = np.hstack(dF_dtheta_list) if dF_dtheta_list else np.zeros((L, 0))  # (L, Ka)
+        dF_dtheta = np.hstack(dF_dtheta_list) if dF_dtheta_list else np.zeros((L, 0))
         Ka = dF_dtheta.shape[1]
         
-        # First term: ∂F/∂θ · a: for each parameter, multiply its derivative by the corresponding term's amplitude
+        # First term: ∂F/∂θ · a
         jr_part1 = np.zeros((L, Ka))
         for j in range(Ka):
             term_idx = param_idx_to_term_idx[j]
             jr_part1[:, j] = dF_dtheta[:, j] * a[term_idx]
         
-        # Second term: F · ∂a/∂θ
-        # Compute ∂a/∂θ numerically by finite differences
+        # Second term: F · ∂a/∂θ (numerical)
         jr_part2 = np.zeros((L, Ka))
         eps = 1e-8
         
@@ -540,17 +662,15 @@ class LieSolver:
             theta_pert = theta.copy()
             theta_pert[j] += eps
             
-            # Evaluate residual at perturbed theta
             terms_pert = [BaseTerm(term.base, term.params.copy()) for term in self.terms]
             self._unpack_theta(theta_pert, terms_pert, active_idx)
-            F_pert = self.feature_matrix(terms_pert)
-            a_pert = self.ls_amplitudes(F_pert)
             
-            # Compute F @ (∂a/∂θ_j)
-            da_j = (a_pert - a) / eps  # (M,)
+            F_pert = self._stacked_feature_matrix_for_terms(terms_pert)
+            a_pert = self.ls_amplitudes(F_pert, Y)
+            
+            da_j = (a_pert - a) / eps
             jr_part2[:, j] = F @ da_j
         
-        # Combine: J[:, j] = jr_part1[:, j] + jr_part2[:, j]
         jac = jr_part1 + jr_part2
         return jac
     
@@ -574,16 +694,19 @@ class LieSolver:
             verbose=0,
         )
         self._unpack_theta(res.x, self.terms, active_idx)
-        F = self.feature_matrix(self.terms)
-        self.amplitudes = self.ls_amplitudes(F)
-        r = F @ self.amplitudes - self.Y
+        
+        # Recompute amplitudes and MSE
+        F = self.stacked_feature_matrix(self.terms)
+        Y = self.stacked_targets()
+        
+        self.amplitudes = self.ls_amplitudes(F, Y)
+        r = F @ self.amplitudes - Y
         mse = float(np.mean(r ** 2))
         if mse > self.mse:
             print('Refine log: MSE worsened')
         elif mse == self.mse:
             print('Refine log: MSE stalled')
         self.mse = mse
-        self._track_history('refine all' if not active_idx else 'refine_batch')
 
 
 
