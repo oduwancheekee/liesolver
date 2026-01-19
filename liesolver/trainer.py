@@ -9,7 +9,7 @@ from pathlib import Path
 from .dataloader import DataLoader
 from .utils.io import save_config
 from .utils.logging import timing
-from .model import LieSolver, Base
+from .model import LieSolver, BrickFamily
 from .plotting import plot_2d_domain, plot_ic_bc, plot_fit_history
 
 class Trainer:
@@ -21,7 +21,7 @@ class Trainer:
         save_config(self.config, self.out_dir)
         self.data_cfg: dict = self.config.get('data', {})
         self.fit_cfg: dict = self.config.get('fit', {})
-        self.base_cfg: dict = self.config.get('base', {})
+        self.bricks_cfg: dict = self.config.get('bricks', {})
         self.seed = self.config.get('seed', 0)
         np.random.seed(self.seed)
         self.experiment_name = self.config.get('experiment_name', 'ICBC_type')
@@ -34,13 +34,13 @@ class Trainer:
         self.coords_sym = getattr(pde_module, 'coords_sym')
         
         self.data = DataLoader(pde_name=pde_name, **self.data_cfg)
-        bases = [Base.init_from_str(base_str, self.trafos, self.coords_sym) for base_str in self.base_cfg]
+        families = [BrickFamily.init_from_str(brick_str, self.trafos, self.coords_sym) for brick_str in self.bricks_cfg]
 
         # Get constraints from data loader
         constraints = self.data.train_constraints
         
         self.model = LieSolver(
-            bases=bases,
+            families=families,
             constraints=constraints,
             ridge=1e-1,
             sobol_seed=self.seed,
@@ -67,21 +67,21 @@ class Trainer:
 
         print(f"Action           MSE        Add-score  Trafos•seed_fun    Parameters") 
         for i in range(max_terms):
-            # Add term with the highest score
+            # Add brick with the highest score
             # Score is cosine similarity with residual 
-            score = self.model.add_best_term(pool_size=pool_size)
-            self.state.log(self.model, self.data, step_type='add_best_term')
+            score = self.model.add_best_brick(pool_size=pool_size)
+            self.state.log(self.model, self.data, step_type='add_best_brick')
             a = self.model.amplitudes[-1]
             sign = '+' if a > 0 else '-'
             if np.abs(a) < 0.01:
                 amp_str = f'a:{sign}{np.format_float_scientific(abs(a), precision=0, exp_digits=1, trim='-')}'
             else:
                 amp_str = f'a:{sign}{np.abs(a):.2f}'
-            term = self.model.terms[-1]
-            print(f"Add {i+1:<2} {amp_str} | {self.model.mse:.2e} | {score:.2e} | {term.base} | {term}")
+            brick = self.model.bricks[-1]
+            print(f"Add {i+1:<2} {amp_str} | {self.model.mse:.2e} | {score:.2e} | {brick.family} | {brick}")
 
-            # Refine batch - only batch_size of last added terms             
-            K = len(self.model.terms) 
+            # Refine batch - only batch_size of last added bricks             
+            K = len(self.model.bricks) 
             if ((i + 1) % batch_size) == 0:
                 active_idx = list(range(max(0, K - batch_size), K))
                 self.model.refine(max_nfev=nfev_batch, active_idx=active_idx)
@@ -126,7 +126,7 @@ class Trainer:
 
 @dataclass
 class FitState:
-    """Tracks history of terms, parameters, and metrics during training.
+    """Tracks history of bricks, parameters, and metrics during training.
     """
     nterms_hist: List[float] = field(default_factory=list)
     nparams_hist: List[float] = field(default_factory=list)
@@ -163,9 +163,9 @@ class FitState:
         data: DataLoader,
         step_type: str = 'unknown',
     ) -> None:
-        nparams = sum(term.params.size for term in model.terms)
+        nparams = sum(brick.params.size for brick in model.bricks)
         self.nparams_hist.append(nparams)
-        self.nterms_hist.append(len(model.terms))
+        self.nterms_hist.append(len(model.bricks))
         self.train_mse_hist.append(model.mse)
 
         test_mse = float(np.mean((model(data.test_x) - data.test_y)**2))
@@ -180,8 +180,8 @@ class FitState:
         
         # Track detailed history
         self.amplitudes_hist.append(model.amplitudes.copy())
-        term_params_snapshot = [term.params.copy() for term in model.terms]
-        self.term_params_hist.append(term_params_snapshot)
+        brick_params_snapshot = [brick.params.copy() for brick in model.bricks]
+        self.term_params_hist.append(brick_params_snapshot)
         self.step_type_hist.append(step_type)
         
         # Compute custom metrics

@@ -22,7 +22,7 @@ class Metric(ABC):
                 super().__init__(name='condition_number')
             
             def compute(self, model: LieSolver, data: DataLoader) -> float:
-                F = model.feature_matrix(model.terms)
+                F = model.feature_matrix(model.bricks)
                 return condition_number(model, F)
     """
     
@@ -56,7 +56,7 @@ class ConditionNumberMetric(Metric):
     
     def compute(self, model: LieSolver, data: DataLoader) -> float:
         """Compute condition number of feature matrix F."""
-        F = model.feature_matrix(model.terms)
+        F = model.feature_matrix(model.bricks)
         return condition_number(model, F)
 
 
@@ -163,7 +163,7 @@ def condition_number(model: LieSolver) -> float:
     Returns:
         float: Condition number κ(F^T F) = λ_max / λ_min.
     """
-    F = model.feature_matrix(model.terms)
+    F = model.feature_matrix(model.bricks)
     
     if F.shape[1] == 0:
         return np.inf
@@ -183,7 +183,7 @@ def matrix_rank(model: LieSolver, tol: float = 1e-10) -> int:
     Compute the numerical rank of the feature matrix F.
     
     A full rank matrix has rank equal to min(L, M).
-    Rank deficiency indicates linear dependence among base functions.
+    Rank deficiency indicates linear dependence among brick functions.
     
     Args:
         model (LieSolver): Model instance.
@@ -192,7 +192,7 @@ def matrix_rank(model: LieSolver, tol: float = 1e-10) -> int:
     Returns:
         int: Numerical rank of F.
     """
-    F = model.feature_matrix(model.terms)
+    F = model.feature_matrix(model.bricks)
     
     if F.shape[1] == 0:
         return 0
@@ -205,9 +205,9 @@ def eigenvalue_distribution(model: LieSolver) -> Tuple[np.ndarray, dict]:
     """
     Compute eigenvalues of F^T F and statistics on their distribution.
     
-    For a well-conditioned problem with orthogonal bases, eigenvalues should be
+    For a well-conditioned problem with orthogonal bricks, eigenvalues should be
     clustered and relatively uniform. High variance in eigenvalues indicates
-    some bases are much more important than others.
+    some bricks are much more important than others.
     
     Args:
         model (LieSolver): Model instance.
@@ -222,7 +222,7 @@ def eigenvalue_distribution(model: LieSolver) -> Tuple[np.ndarray, dict]:
                 - 'max': maximum eigenvalue
                 - 'ratio_max_min': ratio of max to min (condition number)
     """
-    F = model.feature_matrix(model.terms)
+    F = model.feature_matrix(model.bricks)
     
     if F.shape[1] == 0:
         return np.array([]), {'mean': np.nan, 'std': np.nan, 'min': np.nan, 'max': np.nan, 'ratio_max_min': np.inf}
@@ -246,9 +246,9 @@ def eigenvalue_distribution(model: LieSolver) -> Tuple[np.ndarray, dict]:
     return eigvals, stats
 
 
-def base_orthogonality(model: LieSolver) -> Tuple[float, dict]:
+def brick_orthogonality(model: LieSolver) -> Tuple[float, dict]:
     """
-    Check orthogonality of base functions using Hilbert space inner product.
+    Check orthogonality of brick functions using Hilbert space inner product.
     
     For a domain [a, b], the Hilbert space inner product is:
         <f_i, f_j> ≈ Σ f_i(x_k) * f_j(x_k) * dx  (quadrature approximation)
@@ -256,7 +256,7 @@ def base_orthogonality(model: LieSolver) -> Tuple[float, dict]:
     The normalized metric is:
         max_{i ≠ j} |<f_i, f_j>| / (||f_i|| * ||f_j||)
     
-    A value close to 0 indicates near-orthogonal bases (good).
+    A value close to 0 indicates near-orthogonal bricks (good).
     A value close to 1 indicates significant overlap (problematic).
     
     Args:
@@ -264,7 +264,7 @@ def base_orthogonality(model: LieSolver) -> Tuple[float, dict]:
     
     Returns:
         Tuple[float, dict]:
-            - max_overlap: maximum normalized inner product between distinct bases
+            - max_overlap: maximum normalized inner product between distinct bricks
             - stats dict with keys:
                 - 'mean_overlap': mean of all pairwise normalized overlaps
                 - 'min_overlap': minimum normalized overlap
@@ -273,24 +273,24 @@ def base_orthogonality(model: LieSolver) -> Tuple[float, dict]:
     """
     X = model.X
     
-    if len(model.terms) == 0:
+    if len(model.bricks) == 0:
         return 0.0, {'mean_overlap': 0.0, 'min_overlap': 0.0, 'max_overlap': 0.0, 'gram_matrix': np.array([])}
     
-    M = len(model.terms)
+    M = len(model.bricks)
     
-    # Compute base function evaluations
-    base_evals = []
-    for term in model.terms:
-        phi = term.base.eval(X, term.params)
-        base_evals.append(phi)
-    base_evals = np.array(base_evals)  # (M, L)
+    # Compute brick function evaluations
+    brick_evals = []
+    for brick in model.bricks:
+        phi = brick.family.eval(X, brick.params)
+        brick_evals.append(phi)
+    brick_evals = np.array(brick_evals)  # (M, L)
     
     # Compute norms (L2 norm over data points)
-    norms = np.linalg.norm(base_evals, axis=1)  # (M,)
+    norms = np.linalg.norm(brick_evals, axis=1)  # (M,)
     norms = np.maximum(norms, 1e-12)  # Avoid division by zero
     
     # Compute Gram matrix (unnormalized inner products)
-    gram_raw = base_evals @ base_evals.T  # (M, M)
+    gram_raw = brick_evals @ brick_evals.T  # (M, M)
     
     # Normalize by outer product of norms
     norm_outer = norms[:, None] * norms[None, :]
@@ -328,9 +328,9 @@ def get_history_summary(fit_state) -> dict:
             - 'mse_initial': MSE at start
             - 'mse_final': MSE at end
             - 'mse_improvement': percentage improvement
-            - 'n_terms_added': number of terms added
+            - 'n_bricks_added': number of bricks added
             - 'n_refines': number of refinement steps
-            - 'n_removals': number of terms removed
+            - 'n_removals': number of bricks removed
     """
     if not fit_state.train_mse_hist:
         return {
@@ -374,9 +374,9 @@ def get_step_info(fit_state, step_idx: int) -> dict:
         dict: Information with keys:
             - 'step_type': type of step
             - 'mse': MSE at this step
-            - 'n_terms': number of terms at this step
+            - 'n_bricks': number of bricks at this step
             - 'amplitudes': amplitude vector
-            - 'term_params': parameters of all terms
+            - 'brick_params': parameters of all bricks
             - 'amplitude_norms': L2 norms of amplitudes
     """
     if step_idx < 0 or step_idx >= len(fit_state.train_mse_hist):

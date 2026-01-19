@@ -122,12 +122,12 @@ def plot_ic_bc(
 
     def plot_decomposition(ax, idx, axis):
         first_label_drawn = False
-        for i, term in enumerate(model.terms):
-            phi = term.base.eval(x[idx], term.params)
+        for i, brick in enumerate(model.bricks):
+            phi = brick.family.eval(x[idx], brick.params)
             comp = model.amplitudes[i] * phi
             alpha, color = (0.9, 'g') if i in mark_idx else (0.15, 'C0')       
             if not first_label_drawn:
-                ax.plot(x[idx, axis], comp, color=color, alpha=alpha, label='terms')
+                ax.plot(x[idx, axis], comp, color=color, alpha=alpha, label='bricks')
                 first_label_drawn = True
             else:
                 ax.plot(x[idx, axis], comp, color=color, alpha=alpha)

@@ -1,5 +1,5 @@
 pde: wave_1d
-experiment_name: wave-step-g20_10-b5_4-mse4-seed0
+experiment_name: wave-step-g20_10-b5_4-mse6-seed0
 seed: 0
 
 data: 
@@ -22,7 +22,7 @@ data:
       name: IC_u0
     # - expr: 0
     # - expr: sin(2*pi*x)  # non-zero velocity IC
-    - expr: 0.5 * (tanh(50 * (x - 0.4)) - tanh(50 * (x - 0.6)))
+    - expr: 0.5 * (tanh(500 * (x - 0.3)) - tanh(50 * (x - 0.5)))
       loc: [t, 0]
       deriv_order: [0, 1]  # du/dt
       weight: 1.0
@@ -37,7 +37,7 @@ data:
       num_samples: 1250
       name: BC_right
 
-base: 
+bricks: 
   - T4(0,100) T1(0,3.14) sin(x+t)
   - T4(0,100) T1(0,3.14) sin(x-t)
   - T1(-1,2) T4(0,1000) exp(-(x+t)**2)
@@ -47,8 +47,8 @@ base:
   # - x cos(x) sin(t) + t sin(x) cos(t) # and other parameter-derivatives of fourier modes 
 
 fit:
-  mse_tol: 9e-5
-  max_terms: 30 
+  mse_tol: 9e-4
+  max_terms: 100 
   pool_size: 1000
 
   global_every: 20

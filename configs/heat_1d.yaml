@@ -10,10 +10,10 @@ data:
   range_dim:
     x: [0, 1]
     t: [0, 0.1]
-  refresh: 1
+  refresh: 0
   # New constraints format
   constraints:
-    - expr: 0.5 * (tanh(500 * (x - 0.4)) - tanh(500 * (x - 0.6)))
+    - expr: 0.5 * (tanh(50 * (x - 0.4)) - tanh(50 * (x - 0.6)))
     # - expr: sinc(10 * 2*pi*(x-0.3))
       loc: [t, 0]  # t = t_min (initial condition)
       deriv_order: [0, 0]
@@ -29,13 +29,13 @@ data:
       num_samples: 1000
       name: BC_right
 
-base: 
+bricks: 
   - T4 T1(0,3.14) sin(x) exp(-t)
   - T1(0,1) T6(0.1,1e6,log) 1
   - T1(0,1) T6(0.1,1e6,log) T4 T1(0,3.14) sin(x) exp(-t)
 
 fit:
-  mse_tol: 9e-5
+  mse_tol: 9e-4
   max_terms: 60
   nfev_global: 4
   nfev_batch: 4 
