@@ -14,12 +14,12 @@ from .dataloader import DataLoader
 # Colorblind-friendly palette (Wong, 2011)
 COLORS = {
     'true': '#000000',        # Black - ground truth
-    'pred': '#0072B2',        # Blue - predictions
+    'pred': '#E69F00',        # Orange - predictions (High contrast vs Black)
     'error': '#D55E00',       # Vermillion - errors
     'bricks': '#56B4E9',      # Sky blue - brick decomposition
     'train': '#000000',       # Black - train MSE
-    'test': '#0072B2',        # Blue - test MSE  
-    'domain': '#E69F00',      # Orange - domain MSE
+    'test': '#E69F00',        # Orange - test MSE (High contrast vs Black)
+    'domain': '#009E73',      # Bluish Green - domain MSE (Distinct from Black/Orange)
     'ratio': '#CC79A7',       # Reddish purple - ratio line
 }
 
@@ -38,14 +38,14 @@ SIZE_PRESETS = {
     },
     'compact': {  # For 8cm width
         'ic_bc_figsize': (7.5, 2.8),
-        'domain_figsize': (7, 2.85),
-        'history_figsize': (5, 3.5),
-        'title_fontsize': 9,
-        'label_fontsize': 8,
-        'tick_fontsize': 7,
-        'legend_fontsize': 7,
-        'linewidth': 1.2,
-        'markersize': 3,
+        'domain_figsize': (7, 3),
+        'history_figsize': (4.5, 3.5),
+        'title_fontsize': 14,
+        'label_fontsize': 13,
+        'tick_fontsize': 12,
+        'legend_fontsize': 10,
+        'linewidth': 1.4,
+        'markersize': 4,
     },
 }
 
@@ -167,7 +167,7 @@ def plot_ic_bc(
         for i, brick in enumerate(model.bricks):
             phi = brick.family.eval(x[idx], brick.params)
             comp = model.amplitudes[i] * phi
-            alpha = 0.9 if i in mark_idx else 0.25
+            alpha = 0.9 if i in mark_idx else 0.2
             color = COLORS['error'] if i in mark_idx else COLORS['bricks']
             label = 'Bricks' if (add_label and i == 0) else None
             ax.plot(x[idx, axis], comp, color=color, alpha=alpha, 
@@ -183,26 +183,35 @@ def plot_ic_bc(
         coords = ['x', 't']
         ic_bc_dim = coords.index(coord)
         idx = sorted_idx(x, ic_bc_dim, ic_bc_val, 1-ic_bc_dim)
+        if decompose:
+            plot_decomposition(ax[ax_i], idx, 1-ic_bc_dim, add_label=add_legend_entries)
         
         line_true, = ax[ax_i].plot(x[idx, 1-ic_bc_dim], y_true[idx], 
                                    color=COLORS['true'], linewidth=sizes['linewidth'],
                                    linestyle='-')
+        
+
         line_pred, = ax[ax_i].plot(x[idx, 1-ic_bc_dim], y_pred[idx], 
                                    color=COLORS['pred'], linewidth=sizes['linewidth'],
                                    linestyle='--')
         
         if add_legend_entries:
             legend_handles.extend([line_true, line_pred])
-            legend_labels.extend(['True', 'Pred'])
+            legend_labels.extend(['True', 'Predicted'])
         
         mse = np.mean((y_true[idx] - y_pred[idx])**2)
-        ax[ax_i].set_title(f"{coords[ic_bc_dim]}={ic_bc_val} | MSE={mse:.1e}",
-                          fontsize=sizes['title_fontsize'])
+        # ax[ax_i].set_title(f"{coords[ic_bc_dim]}={ic_bc_val} | MSE={mse:.1e}",
+        #                   fontsize=sizes['title_fontsize'])
+        if ax_i == 0:
+            title = f"IC (MSE: {np.format_float_scientific(mse, precision=1, exp_digits=1, trim='-')})"
+        elif ax_i == 1:
+            title = f"BC left (MSE: {np.format_float_scientific(mse, precision=1, exp_digits=1, trim='-')})"
+        else:  # ax_i == 2
+            title = f"BC right (MSE: {np.format_float_scientific(mse, precision=1, exp_digits=1, trim='-')})"
+        ax[ax_i].set_title(title, fontsize=sizes['title_fontsize'])
         ax[ax_i].set_xlabel(coords[1-ic_bc_dim], fontsize=sizes['label_fontsize'])
         ax[ax_i].tick_params(labelsize=sizes['tick_fontsize'])
-        
-        if decompose:
-            plot_decomposition(ax[ax_i], idx, 1-ic_bc_dim, add_label=add_legend_entries)
+
     
     ic_bc_subplot(0, 't', data.bounds[1][0], add_legend_entries=True)
     ic_bc_subplot(1, 'x', data.bounds[0][0])
@@ -211,17 +220,17 @@ def plot_ic_bc(
     # Add bricks to legend if decompose mode
     if decompose:
         from matplotlib.lines import Line2D
-        brick_line = Line2D([0], [0], color=COLORS['bricks'], alpha=0.5,
+        brick_line = Line2D([0], [0], color=COLORS['bricks'], alpha=0.4,
                            linewidth=sizes['linewidth']*0.8)
         legend_handles.append(brick_line)
-        legend_labels.append('Bricks')
+        legend_labels.append('Weighted\nbricks')
     
-    # Single shared legend at the top center
+    # Single shared legend on the right side
     fig.legend(legend_handles, legend_labels, 
-              loc='upper center', fontsize=sizes['legend_fontsize'],
-              framealpha=0.9, bbox_to_anchor=(0.5, 1.0), ncol=len(legend_handles))
+              loc='center left', fontsize=sizes['legend_fontsize'],
+              framealpha=0.9, bbox_to_anchor=(.93, 0.72))
     
-    fig.tight_layout(rect=[0, 0, 1, 0.95])  # Make room for legend at top
+    fig.tight_layout(rect=[0, 0, 0.96, 1])  # Make room for legend on right
     if filepath:
         fig.savefig(filepath, dpi=300, bbox_inches='tight')
     return fig, ax
@@ -269,12 +278,14 @@ def plot_2d_domain(
     
     # Error plot - use grayscale for magnitude (white=0, black=max)
     pcm_err = ax[1].pcolormesh(X, T, y_err, shading="auto", cmap="gray_r")
-    fig.colorbar(pcm_err, ax=ax[1])
-    ax[1].set_title(f"Error | L2RE: {l2re:.1e}", fontsize=sizes['title_fontsize'])
+    cbar_err = fig.colorbar(pcm_err, ax=ax[1])
+    cbar_err.ax.yaxis.set_major_formatter(FuncFormatter(lambda x, pos: f'{x:.1e}'))
+    ax[1].set_title(f"Error (L2RE: {l2re:.1e})", fontsize=sizes['title_fontsize'])
     ax[1].set_xlabel("x", fontsize=sizes['label_fontsize'])
     ax[1].tick_params(labelsize=sizes['tick_fontsize'])
     ax[1].set_aspect('auto')
-    
+    ax[1].set_yticklabels([])  # Hide y-ticks on error plot
+
     fig.tight_layout()
     if filepath:
         fig.savefig(filepath, dpi=300, bbox_inches='tight')
@@ -294,15 +305,15 @@ def plot_fit_history(state, compact: bool = False, save_to=None):
     fig, ax = plt.subplots(figsize=sizes['history_figsize'])
     
     ax.plot(state.nbricks_hist, state.train_mse_hist, 
-            color=COLORS['train'], marker='.', markersize=sizes['markersize'],
-            linewidth=sizes['linewidth'], linestyle='-',
+            color=COLORS['train'], marker='', markersize=sizes['markersize'],
+            linewidth=1.3*sizes['linewidth'], linestyle='-',
             label=f'train | final {state.train_mse_hist[-1]:.1e}')
     ax.plot(state.nbricks_hist, state.test_mse_hist, 
-            color=COLORS['test'], marker='.', markersize=sizes['markersize'],
-            linewidth=sizes['linewidth'], linestyle='--', alpha=0.8,
+            color=COLORS['test'], marker='', markersize=sizes['markersize'],
+            linewidth=1.3*sizes['linewidth'], linestyle='--', alpha=0.8,
             label=f'test            {state.test_mse_hist[-1]:.1e}')
     ax.plot(state.nbricks_hist, state.domain_mse_hist, 
-            color=COLORS['domain'], marker='.', markersize=sizes['markersize'],
+            color=COLORS['domain'], marker='', markersize=sizes['markersize'],
             linewidth=sizes['linewidth'], linestyle='-.', alpha=0.8,
             label=f'domain      {state.domain_mse_hist[-1]:.1e}')
 
@@ -310,31 +321,57 @@ def plot_fit_history(state, compact: bool = False, save_to=None):
                          for i in range(len(state.test_mse_hist))]
         
     ax.plot(state.nbricks_hist, domain_icbc_ratio, 
-            color=COLORS['ratio'], linestyle=':', linewidth=sizes['linewidth']*1.3,
+            color=COLORS['ratio'], linestyle='-', linewidth=sizes['linewidth'],
             label=r'ratio domain/test', 
             alpha=0.95)
     
     # vertical lines at refinement steps
     for i, step_type in enumerate(state.step_type_hist):
         if step_type == 'refine_all':
-            ax.axvline(x=state.nbricks_hist[i], color='k', linestyle='--', linewidth=1, alpha=.5)
+            ax.axvline(x=state.nbricks_hist[i], color='k', linestyle='-', linewidth=1, alpha=.5)
         elif step_type == 'refine_batch':
-            ax.axvline(x=state.nbricks_hist[i], color='grey', linestyle='--', linewidth=1, alpha=.5)
+            ax.axvline(x=state.nbricks_hist[i], color='grey', linestyle='-', linewidth=1, alpha=.5)
 
-    label_map = {nbricks: fr"{nbricks}({nparams})" 
-                 for nbricks, nparams in zip(state.nbricks_hist, state.nparams_hist)}
-    ax.xaxis.set_major_formatter(FuncFormatter(
-        lambda x, pos: label_map.get(int(round(x)), "") if abs(x - round(x)) < 0.25 and int(round(x)) in label_map else ""
-    ))
-    ax.yaxis.grid(True, which='major', linestyle='--', color='k', linewidth=0.5, alpha=0.25)
+    # Bottom x-axis: N_bricks - ensure final brick count always has a tick
+    brick_values = list(set(state.nbricks_hist))  # Unique values
+    final_brick = state.nbricks_hist[-1]
+    if final_brick not in brick_values:
+        brick_values.append(final_brick)
+    brick_values.sort()
+    
+    # Select subset for display to avoid overcrowding, but always include final value
+    step = max(1, len(brick_values) // 8)  # Show ~8 ticks max
+    selected_bricks = [brick_values[i] for i in range(0, len(brick_values), step)]
+    if final_brick not in selected_bricks:
+        selected_bricks.append(final_brick)
+    selected_bricks.sort()
+    
+    ax.set_xticks(selected_bricks)
+    ax.set_xticklabels([str(b) for b in selected_bricks])
+    ax.yaxis.grid(True, which='major', linestyle='--', color='k', linewidth=0.5, alpha=0.2)
+    
+    # Top x-axis: N_parameters - ensure final parameter count always has a tick
+    ax2 = ax.twiny()
+    ax2.set_xlim(ax.get_xlim())  # Same x range as bottom axis
+    
+    # Map brick counts to parameter counts for selected ticks
+    brick_to_param = dict(zip(state.nbricks_hist, state.nparams_hist))
+    param_labels = []
+    for brick_count in selected_bricks:
+        # Find the parameter count for this brick count
+        param_count = brick_to_param.get(brick_count, "")
+        param_labels.append(str(param_count) if param_count else "")
+    
+    ax2.set_xticks(selected_bricks)
+    ax2.set_xticklabels(param_labels)
 
     print(f"nparams: {state.nparams_hist[-1]}")
-    ax.set_xlabel(r"N$_{\text{bricks}}$(N$_{\text{parameters}}$)", 
-                  fontsize=sizes['label_fontsize'])
+    ax.set_xlabel("# bricks", fontsize=sizes['label_fontsize'])
+    ax2.set_xlabel("# parameters", fontsize=sizes['label_fontsize']/1.2)
     ax.set_ylabel("MSE", fontsize=sizes['label_fontsize'])
     ax.tick_params(labelsize=sizes['tick_fontsize'])
     ax.set_yscale("log")
-    ax.legend(fontsize=sizes['legend_fontsize'])
+    ax.legend(fontsize=sizes['legend_fontsize'], loc=[0.45, 0.45])
     
     fig.tight_layout()
     if save_to:
