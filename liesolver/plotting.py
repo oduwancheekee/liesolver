@@ -332,38 +332,22 @@ def plot_fit_history(state, compact: bool = False, save_to=None):
         elif step_type == 'refine_batch':
             ax.axvline(x=state.nbricks_hist[i], color='grey', linestyle='-', linewidth=1, alpha=.5)
 
-    # Bottom x-axis: N_bricks - ensure final brick count always has a tick
-    brick_values = list(set(state.nbricks_hist))  # Unique values
-    final_brick = state.nbricks_hist[-1]
-    if final_brick not in brick_values:
-        brick_values.append(final_brick)
-    brick_values.sort()
-    
-    # Select subset for display to avoid overcrowding, but always include final value
-    step = max(1, len(brick_values) // 8)  # Show ~8 ticks max
-    selected_bricks = [brick_values[i] for i in range(0, len(brick_values), step)]
-    if final_brick not in selected_bricks:
-        selected_bricks.append(final_brick)
-    selected_bricks.sort()
-    
-    ax.set_xticks(selected_bricks)
-    ax.set_xticklabels([str(b) for b in selected_bricks])
+    # Bottom x-axis: N_bricks
+    bricks_label_map = {nbricks: fr"{nbricks}" 
+                        for nbricks in state.nbricks_hist}
+    ax.xaxis.set_major_formatter(FuncFormatter(
+        lambda x, pos: bricks_label_map.get(int(round(x)), "") if abs(x - round(x)) < 0.25 and int(round(x)) in bricks_label_map else ""
+    ))
     ax.yaxis.grid(True, which='major', linestyle='--', color='k', linewidth=0.5, alpha=0.2)
     
-    # Top x-axis: N_parameters - ensure final parameter count always has a tick
+    # Top x-axis: N_parameters  
     ax2 = ax.twiny()
     ax2.set_xlim(ax.get_xlim())  # Same x range as bottom axis
-    
-    # Map brick counts to parameter counts for selected ticks
-    brick_to_param = dict(zip(state.nbricks_hist, state.nparams_hist))
-    param_labels = []
-    for brick_count in selected_bricks:
-        # Find the parameter count for this brick count
-        param_count = brick_to_param.get(brick_count, "")
-        param_labels.append(str(param_count) if param_count else "")
-    
-    ax2.set_xticks(selected_bricks)
-    ax2.set_xticklabels(param_labels)
+    params_label_map = {nbricks: fr"{nparams}" 
+                        for nbricks, nparams in zip(state.nbricks_hist, state.nparams_hist)}
+    ax2.xaxis.set_major_formatter(FuncFormatter(
+        lambda x, pos: params_label_map.get(int(round(x)), "") if abs(x - round(x)) < 0.25 and int(round(x)) in params_label_map else ""
+    ))
 
     print(f"nparams: {state.nparams_hist[-1]}")
     ax.set_xlabel("# bricks", fontsize=sizes['label_fontsize'])
@@ -371,8 +355,11 @@ def plot_fit_history(state, compact: bool = False, save_to=None):
     ax.set_ylabel("MSE", fontsize=sizes['label_fontsize'])
     ax.tick_params(labelsize=sizes['tick_fontsize'])
     ax.set_yscale("log")
-    ax.legend(fontsize=sizes['legend_fontsize'], loc=[0.45, 0.45])
-    
+    # if compact:
+    #     ax.legend(fontsize=sizes['legend_fontsize'], loc=[0.45, 0.45])
+    # else:
+    ax.legend(fontsize=sizes['legend_fontsize'])
+
     fig.tight_layout()
     if save_to:
         fig.savefig(save_to, dpi=300, bbox_inches='tight')
