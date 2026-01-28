@@ -57,16 +57,16 @@ class Trainer:
         Returns:
             FitState: Collected training metrics.
         """
-        max_terms = self.fit_cfg.get('max_terms', 20)
+        max_bricks = self.fit_cfg.get('max_bricks', 20)
         mse_tol = float(self.fit_cfg.get('mse_tol', 1e-3))
         nfev_global = self.fit_cfg.get('nfev_global', 2)
         nfev_batch = self.fit_cfg.get('nfev_batch', 10)
         global_every = self.fit_cfg.get('global_every', 10)
         batch_size = self.fit_cfg.get('batch_size', 5)
         pool_size = self.fit_cfg.get('pool_size', 100)
-
-        print(f"Action           MSE        Add-score  Trafos•seed_fun    Parameters") 
-        for i in range(max_terms):
+        
+        print(f"Action           MSEtrain   MSEtest    MSEdomain Trafos•start_fun         Parameters") 
+        for i in range(max_bricks):
             # Add brick with the highest score
             # Score is cosine similarity with residual 
             score = self.model.add_best_brick(pool_size=pool_size)
@@ -78,7 +78,7 @@ class Trainer:
             else:
                 amp_str = f'a:{sign}{np.abs(a):.2f}'
             brick = self.model.bricks[-1]
-            print(f"Add {i+1:<2} {amp_str} | {self.model.mse:.2e} | {score:.2e} | {brick.family} | {brick}")
+            print(f"Add {i+1:<2} {amp_str} | {self.state.train_mse_hist[-1]:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e} | {brick.family} | {brick}")
 
             # Refine batch - only batch_size of last added bricks             
             K = len(self.model.bricks) 
@@ -86,30 +86,34 @@ class Trainer:
                 active_idx = list(range(max(0, K - batch_size), K))
                 self.model.refine(max_nfev=nfev_batch, active_idx=active_idx)
                 self.state.log(self.model, self.data, step_type='refine_batch')
-                print(f"Refine batch   | {self.model.mse:.2e}")
+                print(f"Refine batch   | {self.model.mse:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e}")
             
             # Refine all parameters
             if (
                 (((i + 1) % global_every) == 0)
-                or ((i + 1) == max_terms)
+                or ((i + 1) == max_bricks)
                 # or (self.mse < mse_tol)
             ):
                 self.model.refine(max_nfev=nfev_global)
                 self.state.log(self.model, self.data, step_type='refine_all')
-                print(f"Refine all {K:>2}  | {self.model.mse:.2e}")
+                print(f"Refine all {K:>2}  | {self.model.mse:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e}")
             if (self.model.mse <= mse_tol):
                 break
         
         self.model.save(self.out_dir)
         self.state.save(self.out_dir / f"{self.experiment_name}-fit_state.npz")
         plot_fit_history(self.state, 
-                         save_to = self.out_dir / f"{self.experiment_name}-fit_history.png")
+                         save_to = self.out_dir / f"{self.experiment_name}-fit_history.png",
+                         compact=True)
         plot_ic_bc(self.model, self.data, 
-                   filepath=self.out_dir / f"{self.experiment_name}-ic_bc_plot.png")
+                   filepath=self.out_dir / f"{self.experiment_name}-ic_bc_plot.png",
+                   compact=True)
         plot_ic_bc(self.model, self.data, decompose=True, 
-                   filepath=self.out_dir / f"{self.experiment_name}-ic_bc_plot-decompose.png")
+                   filepath=self.out_dir / f"{self.experiment_name}-ic_bc_plot-decompose.png",
+                   compact=True)
         plot_2d_domain(self.model, self.data, 
-                       filepath=self.out_dir /  f"{self.experiment_name}-domain_plot.png")
+                       filepath=self.out_dir /  f"{self.experiment_name}-domain_plot.png",
+                       compact=True)
         
         # Plot custom metrics
         from .plotting import plot_custom_metric
@@ -128,7 +132,7 @@ class Trainer:
 class FitState:
     """Tracks history of bricks, parameters, and metrics during training.
     """
-    nterms_hist: List[float] = field(default_factory=list)
+    nbricks_hist: List[float] = field(default_factory=list)
     nparams_hist: List[float] = field(default_factory=list)
     
     train_mse_hist: List[float] = field(default_factory=list)
@@ -140,7 +144,7 @@ class FitState:
     
     # Detailed history for analysis
     amplitudes_hist: List[np.ndarray] = field(default_factory=list)
-    term_params_hist: List[List[np.ndarray]] = field(default_factory=list)
+    brick_params_hist: List[List[np.ndarray]] = field(default_factory=list)
     step_type_hist: List[str] = field(default_factory=list)
     
     # Custom metrics tracking
@@ -165,13 +169,23 @@ class FitState:
     ) -> None:
         nparams = sum(brick.params.size for brick in model.bricks)
         self.nparams_hist.append(nparams)
-        self.nterms_hist.append(len(model.bricks))
+        self.nbricks_hist.append(len(model.bricks))
         self.train_mse_hist.append(model.mse)
 
-        test_mse = float(np.mean((model(data.test_x) - data.test_y)**2))
-        test_l2re = np.sqrt(test_mse/np.mean(data.test_y**2))
+        # Compute test MSE respecting derivative orders in constraints
+        if hasattr(data, 'test_constraints') and len(data.test_constraints) > 0:
+            test_residuals = []
+            for c in data.test_constraints:
+                F_c = model.eval_bricks(model.bricks, c.x, c.deriv_order)
+                pred_c = F_c @ model.amplitudes
+                test_residuals.append(np.sqrt(c.weight) * (pred_c - c.y))
+            test_r = np.concatenate(test_residuals)
+            test_mse = float(np.mean(test_r ** 2))
+        else:
+            test_mse = float(np.mean((model(data.test_x) - data.test_y)**2))
+        test_l2re = np.sqrt(test_mse/np.mean(data.test_y**2)) if np.mean(data.test_y**2) > 0 else 0.0
         domain_mse = float(np.mean((model(data.domain_x) - data.domain_y)**2))
-        domain_l2re = np.sqrt(domain_mse/np.mean(data.test_y**2))
+        domain_l2re = np.sqrt(domain_mse/np.mean(data.test_y**2)) if np.mean(data.test_y**2) > 0 else 0.0
         
         self.test_mse_hist.append(test_mse)
         self.test_l2re_hist.append(test_l2re)
@@ -181,7 +195,7 @@ class FitState:
         # Track detailed history
         self.amplitudes_hist.append(model.amplitudes.copy())
         brick_params_snapshot = [brick.params.copy() for brick in model.bricks]
-        self.term_params_hist.append(brick_params_snapshot)
+        self.brick_params_hist.append(brick_params_snapshot)
         self.step_type_hist.append(step_type)
         
         # Compute custom metrics
@@ -197,7 +211,7 @@ class FitState:
         """
         filepath = Path(filepath)
         save_dict = {
-            'nterms_hist': np.array(self.nterms_hist),
+            'nbricks_hist': np.array(self.nbricks_hist),
             'nparams_hist': np.array(self.nparams_hist),
             'train_mse_hist': np.array(self.train_mse_hist),
             'test_mse_hist': np.array(self.test_mse_hist),
@@ -206,7 +220,7 @@ class FitState:
             'test_l2re_hist': np.array(self.test_l2re_hist),
             'domain_l2re_hist': np.array(self.domain_l2re_hist),
             'amplitudes_hist': np.array(self.amplitudes_hist, dtype=object),
-            'term_params_hist': np.array(self.term_params_hist, dtype=object),
+            'brick_params_hist': np.array(self.brick_params_hist, dtype=object),
             'step_type_hist': np.array(self.step_type_hist),
         }
         
@@ -229,7 +243,7 @@ class FitState:
         data = np.load(filepath, allow_pickle=True)
         
         state = cls()
-        state.nterms_hist = data['nterms_hist'].tolist()
+        state.nbricks_hist = data['nbricks_hist'].tolist()
         state.nparams_hist = data['nparams_hist'].tolist()
         state.train_mse_hist = data['train_mse_hist'].tolist()
         state.test_mse_hist = data['test_mse_hist'].tolist()
@@ -238,7 +252,7 @@ class FitState:
         state.test_l2re_hist = data['test_l2re_hist'].tolist()
         state.domain_l2re_hist = data['domain_l2re_hist'].tolist()
         state.amplitudes_hist = [arr for arr in data['amplitudes_hist']]
-        state.term_params_hist = [list(params) for params in data['term_params_hist']]
+        state.brick_params_hist = [list(params) for params in data['brick_params_hist']]
         state.step_type_hist = data['step_type_hist'].tolist()
         
         # Load custom metrics

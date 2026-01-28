@@ -67,7 +67,7 @@ class ConstraintSet:
     def total_samples(self) -> int:
         return sum(c.n_samples for c in self.constraints)
     
-    def get_stacked_targets(self) -> np.ndarray:
+    def get_weighted_targets(self) -> np.ndarray:
         """Stack all weighted targets into a single vector."""
         if not self.constraints:
             return np.array([])

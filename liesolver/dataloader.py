@@ -149,6 +149,46 @@ class BoxDomain:
             print(f"Warning: requested {n} boundary points, returning {X.shape[0]}")
         return X
 
+    def uniform_face_points(self, n: int, coord_name: str, bound_idx: int) -> np.ndarray:
+        """Uniform grid points on a face (excludes endpoints to avoid overlap with corners).
+        
+        Args:
+            n (int): Target number of points.
+            coord_name (str): Coordinate name fixed on face (e.g., 't' or 'x').
+            bound_idx (int): 0 for low bound, 1 for high bound.
+        
+        Returns:
+            np.ndarray: (m, dim) points; may differ from n due to grid rounding.
+        """
+        if coord_name not in self.coords_names:
+            raise ValueError(f"Unknown coordinate: {coord_name}. Available: {self.coords_names}")
+        coord_idx = self.coords_names.index(coord_name)
+        
+        # Dimensions that vary on this face
+        varying_axes = [j for j in range(self.dim) if j != coord_idx]
+        if len(varying_axes) == 0:
+            # 1D domain, face is a single point
+            X = np.zeros((1, self.dim))
+            X[0, coord_idx] = self.bounds[coord_idx, bound_idx]
+            return X
+        
+        face_dim = len(varying_axes)
+        k = int(np.ceil(n ** (1 / face_dim)))
+        
+        # Create grid for varying dimensions (exclude endpoints to avoid corner overlap)
+        grids = [np.linspace(self.low[j], self.high[j], k + 2)[1:-1] for j in varying_axes]
+        mg = np.meshgrid(*grids, indexing="ij")
+        S = np.stack([g.ravel() for g in mg], axis=1)
+        
+        X = np.empty((S.shape[0], self.dim), dtype=float)
+        for col, j in enumerate(varying_axes):
+            X[:, j] = S[:, col]
+        X[:, coord_idx] = self.bounds[coord_idx, bound_idx]
+        
+        if X.shape[0] != n:
+            print(f"Warning: requested {n} face points, returning {X.shape[0]}")
+        return X
+
 
 class DataLoader:
     """Analytic PDE data generator with constraint-based IC/BC specification."""
@@ -159,13 +199,13 @@ class DataLoader:
         constraints: Sequence[Mapping[str, Any]],
         range_dim: Union[Sequence[Sequence[float]], Mapping[str, Sequence[float]]],
         res: Union[int, Sequence[int]] = 100,
-        num_ic: int = 1000,
-        num_bc: int = 1000,
         num_domain: int = 10000,
+        test_ratio: float = 1.0,
         phys: Optional[Mapping[str, float]] = None,
         data_dir: Union[str, Path] = "data",
         refresh: Union[bool, int] = False,
         sampler_train: str = "halton",
+        sampler_test: str = "uniform",
         pde_mse_tol: float = 1e-10,
         icbc_mse_tol: float = 1e-7,
     ) -> None:
@@ -179,11 +219,11 @@ class DataLoader:
         
         self._constraints_config = list(constraints)
         self.res = res
-        self.num_ic = int(num_ic)
-        self.num_bc = int(num_bc)
         self.num_domain = int(num_domain)
+        self.test_ratio = float(test_ratio)
         self.phys: Dict[str, float] = dict(phys) if phys else {}
         self.sampler_train = sampler_train
+        self.sampler_test = sampler_test
         self.pde_mse_tol = float(pde_mse_tol)
         self.icbc_mse_tol = float(icbc_mse_tol)
 
@@ -203,16 +243,17 @@ class DataLoader:
         if Path(self.cache_path).exists() and not bool(refresh):
             self.load(self.cache_path)
             self._build_constraints()
+            self._build_test_constraints()
             print(f"Loaded: {self.cache_path} | MSE_pde={self.pde_mse:.2e} | MSE_icbc={self.icbc_mse:.2e}")
         else:
-            print(f"Generating data with {self.res} modes ...")
+            print(f"Generating reference data with {self.res} modes ...")
             self.u_expr = self._solve_icbc(self.icbc, geom=self.geom_dict, phys=self.phys, res=self.res)
             self.u_func = sp.lambdify(tuple(self.coords_sym), self.u_expr, modules="numpy")
             self._sample_all()
             self.icbc_mse = float(self._get_icbc_error(self.u_expr, self.icbc, geom=self.geom_dict, res=self.res)["MSE"])
             self.pde_mse = float(self._get_pde_residual(self.u_expr, geom=self.geom_dict, phys=self.phys, res=self.res)["MSE"])
             self.save(self.cache_path)
-            print(f"Data generated | MSE_pde={self.pde_mse:.2e} | MSE_icbc={self.icbc_mse:.2e}")
+            print(f"Reference data generated | MSE_pde={self.pde_mse:.2e} | MSE_icbc={self.icbc_mse:.2e}")
         
         if self.pde_mse > self.pde_mse_tol:
             print(f"WARNING PDE MSE>{self.pde_mse_tol:.2e}")
@@ -345,15 +386,56 @@ class DataLoader:
             self.train_x = np.empty((0, dim))
             self.train_y = np.empty(0)
 
+    def _build_test_constraints(self) -> None:
+        """Build test_constraints mirroring train_constraints.
+        
+        Uses sampler_test to control sampling method:
+        - 'uniform': uniform grid points on face (no random seed needed)
+        - 'halton'/'sobol'/'random': quasi-random with offset seed for independence
+        """
+        geom = self.geometry
+        dim = len(self.coords_sym)
+        
+        self.test_constraints = ConstraintSet()
+        for i, cfg in enumerate(self._constraints_config):
+            expr = self._parse_expr(cfg.get('expr', 0))
+            loc = cfg.get('loc')
+            coord_name, bound_idx = loc[0], int(loc[1])
+            deriv_order = tuple(cfg.get('deriv_order', [0] * dim))
+            weight = float(cfg.get('weight', 1.0))
+            num_samples = int(cfg.get('num_samples', 1000))
+            num_test = int(num_samples * self.test_ratio)
+            name = cfg.get('name', f"constraint_{i}")
+            
+            if self.sampler_test == "uniform":
+                # Uniform grid points on face
+                X_test = geom.uniform_face_points(num_test, coord_name, bound_idx)
+            else:
+                # Quasi-random with offset seed for independence from train set
+                X_test = geom.random_face_points(num_test, coord_name, bound_idx, 
+                                                 sampler=self.sampler_test, seed=42 + i)
+            
+            # Evaluate target expression (for derivative constraints, this is the derivative target)
+            y_test = self._eval_expr_at_points(expr, X_test)
+            
+            self.test_constraints.add(Constraint(
+                x=X_test, y=y_test, deriv_order=deriv_order, weight=weight, name=f"test_{name}"
+            ))
+
     def _sample_all(self) -> None:
         geom = self.geometry
+        dim = len(self.coords_sym)
         self._build_constraints()
+        self._build_test_constraints()
         
-        # Test/domain data for validation plots
-        test_ic = geom.uniform_initial_points(self.num_ic)
-        test_bc = geom.uniform_boundary_points(self.num_bc)
-        self.test_x = np.vstack([test_ic, test_bc])
-        self.test_y = self._eval_u(self.test_x)
+        # Legacy test arrays (stacked from test_constraints for backward compatibility)
+        if self.test_constraints.n_constraints > 0:
+            self.test_x = np.vstack([c.x for c in self.test_constraints])
+            self.test_y = np.concatenate([c.y for c in self.test_constraints])
+        else:
+            self.test_x = np.empty((0, dim))
+            self.test_y = np.empty(0)
+        
         self.domain_x = geom.uniform_domain_points(self.num_domain)
         self.domain_y = self._eval_u(self.domain_x)
 

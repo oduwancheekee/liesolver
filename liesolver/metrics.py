@@ -22,7 +22,7 @@ class Metric(ABC):
                 super().__init__(name='condition_number')
             
             def compute(self, model: LieSolver, data: DataLoader) -> float:
-                F = model.feature_matrix(model.bricks)
+                F = model.eval_bricks(model.bricks, data.train_x)
                 return condition_number(model, F)
     """
     
@@ -49,25 +49,25 @@ class Metric(ABC):
 
 
 class ConditionNumberMetric(Metric):
-    """Built-in metric for tracking condition number of feature matrix."""
+    """Built-in metric for tracking condition number of brick matrix."""
     
     def __init__(self):
         super().__init__(name='condition_number')
     
     def compute(self, model: LieSolver, data: DataLoader) -> float:
-        """Compute condition number of feature matrix F."""
-        F = model.feature_matrix(model.bricks)
+        """Compute condition number of brick matrix F."""
+        F = model.eval_bricks(model.bricks, data.train_x)
         return condition_number(model, F)
 
 
 class ConditionNumberMetric(Metric):
-    """Metric that computes the condition number of the feature matrix."""
+    """Metric that computes the condition number of the brick matrix."""
     
     def __init__(self):
         super().__init__(name='condition_number')
     
     def compute(self, model: LieSolver, data: DataLoader) -> float:
-        """Compute condition number of feature matrix."""
+        """Compute condition number of brick matrix."""
         return condition_number(model)
 
 
@@ -163,7 +163,11 @@ def condition_number(model: LieSolver) -> float:
     Returns:
         float: Condition number κ(F^T F) = λ_max / λ_min.
     """
-    F = model.feature_matrix(model.bricks)
+    # Need sample points - use constraint points
+    if model.constraints is None or len(model.constraints) == 0:
+        raise ValueError("Model must have constraints to compute condition number")
+    X = model.constraints.constraints[0].x
+    F = model.eval_bricks(model.bricks, X)
     
     if F.shape[1] == 0:
         return np.inf
@@ -180,7 +184,7 @@ def condition_number(model: LieSolver) -> float:
 
 def matrix_rank(model: LieSolver, tol: float = 1e-10) -> int:
     """
-    Compute the numerical rank of the feature matrix F.
+    Compute the numerical rank of the brick matrix F.
     
     A full rank matrix has rank equal to min(L, M).
     Rank deficiency indicates linear dependence among brick functions.
@@ -192,7 +196,10 @@ def matrix_rank(model: LieSolver, tol: float = 1e-10) -> int:
     Returns:
         int: Numerical rank of F.
     """
-    F = model.feature_matrix(model.bricks)
+    if model.constraints is None or len(model.constraints) == 0:
+        raise ValueError("Model must have constraints to compute rank")
+    X = model.constraints.constraints[0].x
+    F = model.eval_bricks(model.bricks, X)
     
     if F.shape[1] == 0:
         return 0
@@ -222,7 +229,10 @@ def eigenvalue_distribution(model: LieSolver) -> Tuple[np.ndarray, dict]:
                 - 'max': maximum eigenvalue
                 - 'ratio_max_min': ratio of max to min (condition number)
     """
-    F = model.feature_matrix(model.bricks)
+    if model.constraints is None or len(model.constraints) == 0:
+        raise ValueError("Model must have constraints")
+    X = model.constraints.constraints[0].x
+    F = model.eval_bricks(model.bricks, X)
     
     if F.shape[1] == 0:
         return np.array([]), {'mean': np.nan, 'std': np.nan, 'min': np.nan, 'max': np.nan, 'ratio_max_min': np.inf}
@@ -271,7 +281,9 @@ def brick_orthogonality(model: LieSolver) -> Tuple[float, dict]:
                 - 'max_overlap': maximum normalized overlap
                 - 'gram_matrix': full Gram matrix (M x M) of normalized overlaps
     """
-    X = model.X
+    if model.constraints is None or len(model.constraints) == 0:
+        raise ValueError("Model must have constraints")
+    X = model.constraints.constraints[0].x
     
     if len(model.bricks) == 0:
         return 0.0, {'mean_overlap': 0.0, 'min_overlap': 0.0, 'max_overlap': 0.0, 'gram_matrix': np.array([])}

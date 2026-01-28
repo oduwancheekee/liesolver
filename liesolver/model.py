@@ -300,7 +300,7 @@ class LieSolver:
         self.mse = np.inf
 
     def __call__(self, X: np.ndarray):
-        F = self.feature_matrix(self.bricks, X)
+        F = self.eval_bricks(self.bricks, X)
         return F @ self.amplitudes
 
     def save(self, folder: Path = None, filename = None) -> None:
@@ -339,9 +339,28 @@ class LieSolver:
         np.savez_compressed(path, **save_dict)
 
     @classmethod
-    def init_from_npz(cls, file, trafos, coords_sym):
+    def init_from_npz(cls, folder: Union[str, Path], trafos, coords_sym):
+        """Load LieSolver from npz file in a folder.
         
-        data = np.load(file, allow_pickle=True)
+        Args:
+            folder: Path to experiment folder containing model_*.npz file.
+            trafos: List of Transformation objects.
+            coords_sym: List of coordinate symbols.
+        
+        Returns:
+            LieSolver: Restored model instance.
+        """
+        folder = Path(folder)
+        
+        # Find model npz file (pattern: model_*.npz)
+        model_files = list(folder.glob("model_*.npz"))
+        if not model_files:
+            raise FileNotFoundError(f"No model_*.npz file found in {folder}")
+        if len(model_files) > 1:
+            print(f"Warning: Multiple model files found, using {model_files[0].name}")
+        filepath = model_files[0]
+        
+        data = np.load(filepath, allow_pickle=True)
         
         # Rebuild constraints from saved data
         n_constraints = int(data['n_constraints'])
@@ -372,23 +391,71 @@ class LieSolver:
         for i, fam_idx in enumerate(family_idx):
             model.add_defined_brick(int(fam_idx), np.asarray(theta[i]))
         
-        # Rebuild amplitudes and MSE
-        F = model.stacked_feature_matrix(model.bricks)
-        Y = model.stacked_targets()
-        model.amplitudes = model.ls_amplitudes(F, Y)
-        r = F @ model.amplitudes - Y
-        model.mse = float(np.mean(r ** 2))
-        
-        # Load history if available
-        if "history_amplitudes" in data:
-            model.history['amplitudes'] = list(data["history_amplitudes"])
-            model.history['term_params'] = [list(tp) for tp in data["history_term_params"]]
-            model.history['mse'] = list(data["history_mse"])
-            model.history['n_terms'] = list(data["history_n_terms"])
-            model.history['step_type'] = list(data["history_step_type"])
+        # Load saved amplitudes directly
+        model.amplitudes = np.asarray(data['a'])
+        model.mse = float(np.asarray(data['mse']).item())
         
         data.close()
         return model
+
+    def load_from_npz(self, folder: Union[str, Path], trafos, coords_sym) -> None:
+        """Load model state from npz file in a folder into this instance.
+        
+        Overwrites families, bricks, amplitudes, and mse from the saved model.
+        
+        Args:
+            folder: Path to experiment folder containing model_*.npz file.
+            trafos: List of Transformation objects.
+            coords_sym: List of coordinate symbols.
+        """
+        folder = Path(folder)
+        
+        # Find model npz file (pattern: model_*.npz)
+        model_files = list(folder.glob("model_*.npz"))
+        if not model_files:
+            raise FileNotFoundError(f"No model_*.npz file found in {folder}")
+        if len(model_files) > 1:
+            print(f"Warning: Multiple model files found, using {model_files[0].name}")
+        filepath = model_files[0]
+        
+        data = np.load(filepath, allow_pickle=True)
+        
+        # Rebuild constraints from saved data
+        n_constraints = int(data['n_constraints'])
+        constraint_x = data['constraint_x']
+        constraint_y = data['constraint_y']
+        constraint_deriv_order = data['constraint_deriv_order']
+        constraint_weight = data['constraint_weight']
+        constraint_name = data['constraint_name']
+        
+        constraints = ConstraintSet()
+        for i in range(n_constraints):
+            constraints.add(Constraint(
+                x=np.asarray(constraint_x[i]),
+                y=np.asarray(constraint_y[i]),
+                deriv_order=tuple(constraint_deriv_order[i]),
+                weight=float(constraint_weight[i]),
+                name=str(constraint_name[i]),
+            ))
+        
+        # Overwrite instance attributes
+        self.families = [BrickFamily.init_from_str(brick_str, trafos, coords_sym) for brick_str in data["families_str"]]
+        self.constraints = constraints
+        self.ridge = float(np.asarray(data["ridge"]).item())
+        self.sobol_seed = int(np.asarray(data["sobol_seed"]).item())
+        
+        # Clear and repopulate bricks
+        self.bricks = []
+        family_idx = data["family_idx"]
+        theta = data["theta"]
+        for i, fam_idx in enumerate(family_idx):
+            self.add_defined_brick(int(fam_idx), np.asarray(theta[i]))
+        
+        # Load saved amplitudes and mse
+        self.amplitudes = np.asarray(data['a'])
+        self.mse = float(np.asarray(data['mse']).item())
+        
+        data.close()
 
     def add_defined_brick(self, family_idx, params):
         brick = Brick(self.families[family_idx],
@@ -408,70 +475,61 @@ class LieSolver:
         removed = self.bricks.pop(brick_idx)
 
         if self.bricks:
-            F = self.stacked_feature_matrix(self.bricks)
-            Y = self.stacked_targets()
+            F = self.eval_bricks_weighted(self.bricks)
+            Y = self.constraints.get_weighted_targets()
             self.amplitudes = self.ls_amplitudes(F, Y)
             r = F @ self.amplitudes - Y
             self.mse = float(np.mean(r ** 2))
         else:
             self.amplitudes = np.zeros(0)
-            Y = self.stacked_targets()
+            Y = self.constraints.get_weighted_targets()
             self.mse = float(np.mean(Y ** 2))
         
         return removed
 
-    def feature_matrix(self, bricks: List[Brick], X: np.ndarray) -> np.ndarray:
-        """Build feature matrix for given bricks at points X."""
-        cols = [brick.family.eval(X, brick.params) for brick in bricks]
-        return np.stack(cols, axis=1)  # (L, M)
-    
-    def feature_matrix_derivative(
-        self, 
-        bricks: List[Brick], 
-        X: np.ndarray, 
-        deriv_order: Tuple[int, ...]
-    ) -> np.ndarray:
-        """Build feature matrix for derivative constraint.
+    def eval_bricks(self, bricks: List[Brick], X: np.ndarray, deriv_order: Optional[Tuple[int, ...]] = None) -> np.ndarray:
+        """Evaluate bricks at given points, optionally with coordinate derivatives.
         
         Args:
-            bricks: List of Brick objects.
-            X: Sample points, shape (N, dim).
-            deriv_order: Derivative order per coordinate.
+            bricks: List of Brick objects to evaluate.
+            X: Sample points, shape (n_samples, n_coords).
+            deriv_order: Derivative order per coordinate, e.g., (0, 1) for ∂/∂t.
+                None or (0, 0, ...) evaluates brick functions directly.
         
         Returns:
-            np.ndarray: Feature matrix, shape (N, M).
+            np.ndarray: Brick matrix, shape (n_samples, n_bricks).
+                Each column is one brick evaluated at all sample points.
         """
-        if all(d == 0 for d in deriv_order):
-            return self.feature_matrix(bricks, X)
+        if not bricks:
+            return np.zeros((X.shape[0], 0))
         cols = [brick.family.eval(X, brick.params, deriv_order) for brick in bricks]
         return np.stack(cols, axis=1)
     
-    def stacked_feature_matrix(self, bricks: List[Brick]) -> np.ndarray:
-        """Build stacked feature matrix for all constraints.
+    def eval_bricks_weighted(self, bricks: List[Brick]) -> np.ndarray:
+        """Evaluate bricks at all constraint points with weighting for least squares.
         
-        Each constraint block is scaled by sqrt(weight).
+        For each constraint (IC, BC, or derivative), evaluates bricks at constraint 
+        points with the appropriate derivative order, scales by √weight, and stacks 
+        vertically to form the system matrix F for the linear system F·a ≈ Y.
+        
+        Args:
+            bricks: List of Brick objects.
         
         Returns:
-            np.ndarray: Stacked feature matrix, shape (total_samples, M).
+            np.ndarray: System matrix, shape (total_constraint_samples, n_bricks).
+                Vertical stack of weighted constraint blocks.
         """
-        if self.constraints is None or len(self.constraints) == 0:
-            return self.feature_matrix(bricks)
-        
         blocks = []
         for c in self.constraints:
-            F_c = self.feature_matrix_derivative(bricks, c.x, c.deriv_order)
+            F_c = self.eval_bricks(bricks, c.x, c.deriv_order)
             blocks.append(np.sqrt(c.weight) * F_c)
         return np.vstack(blocks)
     
-    def stacked_targets(self) -> np.ndarray:
-        """Get stacked weighted target vector for all constraints."""
-        return self.constraints.get_stacked_targets()
-
     def ls_amplitudes(self, F: np.ndarray, Y: np.ndarray) -> np.ndarray:
         """
         Solve least squares for amplitudes.
         Args:
-            F (np.ndarray): Design matrix (L, M).
+            F (np.ndarray): Brick matrix (L, M).
             Y (np.ndarray): Targets.
         Returns:
             np.ndarray: Amplitude vector (M,).
@@ -497,12 +555,12 @@ class LieSolver:
         """
         # Compute current residual
         if len(self.bricks) == 0:
-            r = self.stacked_targets()
+            r = self.constraints.get_weighted_targets()
         else:
-            F = self.stacked_feature_matrix(self.bricks)
-            Y_stacked = self.stacked_targets()
-            a = self.ls_amplitudes(F, Y_stacked)
-            r = Y_stacked - F @ a
+            F = self.eval_bricks_weighted(self.bricks)
+            Y = self.constraints.get_weighted_targets()
+            a = self.ls_amplitudes(F, Y)
+            r = Y - F @ a
         
         norm_r = np.linalg.norm(r) + 1e-12
         best_score = -np.inf
@@ -530,11 +588,11 @@ class LieSolver:
         self.bricks.append(best_brick)
         
         # Recompute amplitudes and MSE
-        F = self.stacked_feature_matrix(self.bricks)
-        Y_stacked = self.stacked_targets()
+        F = self.eval_bricks_weighted(self.bricks)
+        Y = self.constraints.get_weighted_targets()
         
-        self.amplitudes = self.ls_amplitudes(F, Y_stacked)
-        r = F @ self.amplitudes - Y_stacked
+        self.amplitudes = self.ls_amplitudes(F, Y)
+        r = F @ self.amplitudes - Y
         mse = float(np.mean(r ** 2))
         if mse > self.mse:
             print('Add log: MSE worsened')
@@ -581,8 +639,8 @@ class LieSolver:
         bricks = [Brick(brick.family, brick.params.copy()) for brick in self.bricks]
         self._unpack_theta(theta, bricks, active_idx)
         
-        F = self._stacked_feature_matrix_for_bricks(bricks)
-        Y = self.stacked_targets()
+        F = self.eval_bricks_weighted(bricks)
+        Y = self.constraints.get_weighted_targets()
         
         a = self.ls_amplitudes(F, Y)
         self._cached_F = F
@@ -590,14 +648,6 @@ class LieSolver:
         self._cached_bricks = bricks
         self._cached_Y = Y
         return F @ a - Y
-    
-    def _stacked_feature_matrix_for_bricks(self, bricks: List[Brick]) -> np.ndarray:
-        """Build stacked feature matrix for given bricks (not self.bricks)."""
-        blocks = []
-        for c in self.constraints:
-            F_c = self.feature_matrix_derivative(bricks, c.x, c.deriv_order)
-            blocks.append(np.sqrt(c.weight) * F_c)
-        return np.vstack(blocks)
     
     def _jacobian_varpro(self, theta: np.ndarray, active_idx: List[int]) -> np.ndarray:
         """Analytical Jacobian of variable-projection residual: ∂r/∂θ.
@@ -665,7 +715,7 @@ class LieSolver:
             bricks_pert = [Brick(brick.family, brick.params.copy()) for brick in self.bricks]
             self._unpack_theta(theta_pert, bricks_pert, active_idx)
             
-            F_pert = self._stacked_feature_matrix_for_bricks(bricks_pert)
+            F_pert = self.eval_bricks_weighted(bricks_pert)
             a_pert = self.ls_amplitudes(F_pert, Y)
             
             da_j = (a_pert - a) / eps
@@ -696,8 +746,8 @@ class LieSolver:
         self._unpack_theta(res.x, self.bricks, active_idx)
         
         # Recompute amplitudes and MSE
-        F = self.stacked_feature_matrix(self.bricks)
-        Y = self.stacked_targets()
+        F = self.eval_bricks_weighted(self.bricks)
+        Y = self.constraints.get_weighted_targets()
         
         self.amplitudes = self.ls_amplitudes(F, Y)
         r = F @ self.amplitudes - Y
