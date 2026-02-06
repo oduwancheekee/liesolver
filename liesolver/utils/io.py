@@ -10,11 +10,10 @@ import logging
 import sys
 
 def configure_logging(log_path: str = "run.log") -> None:
-    """
-    Configure application logging to output to stdout and a log file.
+    """Configure application logging to output to stdout and a log file.
+    
     Args:
-        log_path (str): Path to the log file to append to. Uses INFO level with a
-            '[%(asctime)s] - %(message)s' format and '%Y-%m-%d %H:%M:%S' date format.
+        log_path: Path to the log file to append to.
     """
     fmt = "[%(asctime)s] - %(message)s"
     datefmt = "%Y-%m-%d %H:%M:%S"
@@ -34,13 +33,15 @@ def create_output_dir(
     root: Union[str, Path] = "outputs",
     suffix: str = "",
 ) -> Path:
-    """
-    Create a run-specific output directory: root/DATE/TIME_experiment[_suffix].
+    """Create a run-specific output directory: root/DATE/TIME_experiment[_suffix].
+    
     Args:
-        experiment_name (str): Name used in the directory prefix.
-        root (Union[str, Path]): Base output directory (created if missing).
-        suffix (str): Optional extra tag appended after the experiment name.
-    Returns (Path): path to the created directory (parents=True, exist_ok=True).
+        experiment_name: Name used in the directory prefix.
+        root: Base output directory (created if missing).
+        suffix: Optional extra tag appended after the experiment name.
+    
+    Returns:
+        Path: Path to the created directory.
     """
     date_part, time_part = _now()
     parts = [time_part, experiment_name]
@@ -51,19 +52,21 @@ def create_output_dir(
     return out_dir
 
 def _now() -> tuple[str, str]:
-    """Returns (Tuple[str, str]): (YYYY-MM-DD, HH-MM-SS)."""
+    """Get current datetime as (YYYY-MM-DD, HH-MM-SS)."""
     ts = datetime.now()
     return ts.date().isoformat(), ts.strftime("%H-%M-%S")
 
 
 def save_config(cfg: Dict, out_dir: Path, name: str = "config.yaml") -> Path:
-    """
-    Save a configuration dictionary as YAML into the output directory.
+    """Save a configuration dictionary as YAML into the output directory.
+    
     Args:
-        cfg (Dict): Configuration mapping to serialize.
-        out_dir (Path): Destination folder where the file is written.
-        name (str): File name to use (default: 'config.yaml').
-    Returns (Path): path to the written YAML file.
+        cfg: Configuration mapping to serialize.
+        out_dir: Destination folder where the file is written.
+        name: File name to use (default: 'config.yaml').
+    
+    Returns:
+        Path: Path to the written YAML file.
     """
     path = out_dir / name
     with open(path, "w") as fp:

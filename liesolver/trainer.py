@@ -13,7 +13,12 @@ from .model import LieSolver, BrickFamily
 from .plotting import plot_2d_domain, plot_ic_bc, plot_fit_history
 
 class Trainer:
-    """Data loading, model initialization, training, saving, and plotting."""
+    """Data loading, model initialization, training, and plotting.
+    
+    Args:
+        config: Configuration dict with 'data', 'fit', 'bricks', 'seed' keys.
+        out_dir: Output directory for results.
+    """
     def __init__(self, config: dict, out_dir=None) -> None: 
         self.config = config
         self.out_dir = out_dir
@@ -28,6 +33,7 @@ class Trainer:
         self.state = FitState()
     
     def init_model(self):
+        """Initialize DataLoader, BrickFamilies, and LieSolver from config."""
         pde_name = self.config.get('pde', 'pde_type')
         pde_module = importlib.import_module(f"liesolver.pdes.{pde_name}")
         self.trafos = getattr(pde_module, 'trafos')
@@ -54,6 +60,7 @@ class Trainer:
     @timing
     def fit(self):
         """Run greedy add-refine training loop, save model, and generate plots.
+        
         Returns:
             FitState: Collected training metrics.
         """
@@ -65,7 +72,7 @@ class Trainer:
         batch_size = self.fit_cfg.get('batch_size', 5)
         pool_size = self.fit_cfg.get('pool_size', 100)
         
-        print(f"Action           MSEtrain   MSEtest    MSEdomain Trafos•start_fun         Parameters") 
+        print(f"Action           MSEtrain   MSEtest   MSEdomain Trafos•start_fun         Parameters") 
         for i in range(max_bricks):
             # Add brick with the highest score
             # Score is cosine similarity with residual 
@@ -104,16 +111,16 @@ class Trainer:
         self.state.save(self.out_dir / f"{self.experiment_name}-fit_state.npz")
         plot_fit_history(self.state, 
                          save_to = self.out_dir / f"{self.experiment_name}-fit_history.png",
-                         compact=True)
+                         compact=False)
         plot_ic_bc(self.model, self.data, 
                    filepath=self.out_dir / f"{self.experiment_name}-ic_bc_plot.png",
-                   compact=True)
+                   compact=False)
         plot_ic_bc(self.model, self.data, decompose=True, 
                    filepath=self.out_dir / f"{self.experiment_name}-ic_bc_plot-decompose.png",
-                   compact=True)
+                   compact=False)
         plot_2d_domain(self.model, self.data, 
                        filepath=self.out_dir /  f"{self.experiment_name}-domain_plot.png",
-                       compact=True)
+                       compact=False)
         
         # Plot custom metrics
         from .plotting import plot_custom_metric
@@ -130,8 +137,7 @@ class Trainer:
 
 @dataclass
 class FitState:
-    """Tracks history of bricks, parameters, and metrics during training.
-    """
+    """Tracks history of bricks, parameters, and metrics during training."""
     nbricks_hist: List[float] = field(default_factory=list)
     nparams_hist: List[float] = field(default_factory=list)
     
@@ -155,7 +161,7 @@ class FitState:
         """Set custom metrics to track during training.
         
         Args:
-            metrics (List[Metric]): List of Metric instances to track.
+            metrics: List of Metric instances to track.
         """
         self._metric_trackers = metrics
         for metric in metrics:
@@ -167,6 +173,13 @@ class FitState:
         data: DataLoader,
         step_type: str = 'unknown',
     ) -> None:
+        """Log current training state and compute metrics.
+        
+        Args:
+            model: Current LieSolver model.
+            data: DataLoader with train/test/domain data.
+            step_type: Description of training step ('add_best_brick', 'refine_batch', etc.).
+        """
         nparams = sum(brick.params.size for brick in model.bricks)
         self.nparams_hist.append(nparams)
         self.nbricks_hist.append(len(model.bricks))
@@ -204,10 +217,10 @@ class FitState:
             self.metrics_history[metric.name].append(value)
     
     def save(self, filepath: Union[str, Path]) -> None:
-        """Save FitState to npz file.
+        """Save FitState to NPZ file.
         
         Args:
-            filepath (Union[str, Path]): Path to save the state.
+            filepath: Path to save the state.
         """
         filepath = Path(filepath)
         save_dict = {
@@ -231,10 +244,10 @@ class FitState:
     
     @classmethod
     def load(cls, filepath: Union[str, Path]) -> 'FitState':
-        """Load FitState from npz file.
+        """Load FitState from NPZ file.
         
         Args:
-            filepath (Union[str, Path]): Path to load the state from.
+            filepath: Path to load the state from.
         
         Returns:
             FitState: Restored state object.

@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
@@ -80,9 +79,9 @@ class MetricPlotter(ABC):
         """Plot metric values from fit_state.
         
         Args:
-            fit_state (FitState): FitState instance with tracked metrics.
-            metric_name (str): Name of the metric to plot.
-            filepath (Optional[Union[str, Path]]): Path to save the figure.
+            fit_state: FitState instance with tracked metrics.
+            metric_name: Name of the metric to plot.
+            filepath: Path to save the figure.
             **kwargs: Additional plotting parameters.
         """
         raise NotImplementedError("Subclasses must implement plot()")
@@ -101,13 +100,13 @@ class SimpleMetricPlotter(MetricPlotter):
         """Plot metric values as a simple line plot.
         
         Args:
-            fit_state (FitState): FitState instance with tracked metrics.
-            metric_name (str): Name of the metric to plot.
-            filepath (Optional[Union[str, Path]]): Path to save the figure.
-            figsize (tuple): Figure size. Default (8, 5).
-            ylabel (Optional[str]): Y-axis label. Defaults to metric_name.
-            title (Optional[str]): Plot title. Defaults to metric_name evolution.
-            log_scale (bool): Use log scale for y-axis. Default False.
+            fit_state: FitState instance with tracked metrics.
+            metric_name: Name of the metric to plot.
+            filepath: Path to save the figure.
+            figsize: Figure size. Default (8, 5).
+            ylabel: Y-axis label. Defaults to metric_name.
+            title: Plot title. Defaults to metric_name evolution.
+            log_scale: Use log scale for y-axis. Default False.
             **kwargs: Additional parameters passed to plt.plot().
         """
         if metric_name not in fit_state.metrics_history:
@@ -134,7 +133,7 @@ class SimpleMetricPlotter(MetricPlotter):
 
 
 def sorted_idx(arr, dim, val, sort_dim):
-    """ Indices where arr[:, dim] ≈ val, ordered by arr[:, sort_dim]"""
+    """Get indices where arr[:, dim] ≈ val, ordered by arr[:, sort_dim]."""
     mask = np.isclose(arr[:, dim], val)
     idx = np.where(mask)[0]
     return idx[np.argsort(arr[idx, sort_dim])]
@@ -148,13 +147,17 @@ def plot_ic_bc(
         filepath: Union[str, Path, None] = None
         ):
     """Plot initial and boundary condition curves with model predictions.
+    
     Args:
-       model (LieSolver): Predictor providing outputs.
-       data (DataLoader): Provides eval_x, eval_y, range_time, range_spatial.
-       compact (bool): If True, use smaller figure with larger relative fonts.
-       filepath (str | Path, optional): Path to save the figure.
+        model: LieSolver providing predictions.
+        data: DataLoader with domain_x, domain_y, and bounds.
+        decompose: If True, show individual brick contributions.
+        mark_idx: Brick indices to highlight.
+        compact: If True, use smaller figure with larger relative fonts.
+        filepath: Path to save the figure.
+    
     Returns:
-       fig (Figure), ax (Axes or ndarray of Axes): Created figure and axes.
+        Tuple[Figure, Axes]: Created figure and axes.
     """
     sizes = SIZE_PRESETS['compact'] if compact else SIZE_PRESETS['default']
     
@@ -244,13 +247,15 @@ def plot_2d_domain(
         filepath: Union[str, Path, None] = None
         ):
     """Plot predicted and error fields over (x, t) with pcolormesh.
+    
     Args:
-       model (LieSolver | LieModule): Predictor providing outputs.
-       data (DataLoader): Has eval_x (N,2) and eval_y (N,) on a grid.
-       compact (bool): If True, use smaller figure with larger relative fonts.
-       filepath (str | Path, optional): Path to save the figure.
+        model: LieSolver providing predictions.
+        data: DataLoader with domain_x, domain_y on a grid.
+        compact: If True, use smaller figure with larger relative fonts.
+        filepath: Path to save the figure.
+    
     Returns:
-       fig (Figure), ax (Axes or ndarray of Axes): Created figure and axes.
+        Tuple[Figure, Axes]: Created figure and axes.
     """
     sizes = SIZE_PRESETS['compact'] if compact else SIZE_PRESETS['default']
     
@@ -292,13 +297,15 @@ def plot_2d_domain(
     return fig, ax
 
 def plot_fit_history(state, compact: bool = False, save_to=None):
-    """Plot training set MSE vs number of parameters in model (log scale).
+    """Plot training/test/domain MSE vs number of bricks (log scale).
+    
     Args:
-       state (FitState): Provides nparams_hist, mse_hist
-       compact (bool): If True, use smaller figure with larger relative fonts.
-       save_to (str | Path, optional): Path to save the figure.
+        state: FitState with nbricks_hist, nparams_hist, and MSE histories.
+        compact: If True, use smaller figure with larger relative fonts.
+        save_to: Path to save the figure.
+    
     Returns:
-       fig (Figure), ax (Axes): Created figure and axes.
+        Tuple[Figure, Axes]: Created figure and axes.
     """
     sizes = SIZE_PRESETS['compact'] if compact else SIZE_PRESETS['default']
     
@@ -371,15 +378,14 @@ def plot_amplitude_evolution(fit_state, figsize=(12, 6), margin_fraction=0.5, fi
     
     Visualizes how each brick's amplitude (normalized by total) evolves throughout
     the fitting process. Each brick is shown at a fixed x-position, with points
-    scattered horizontally for visibility. Transparency indicates age (older = more
-    transparent), color indicates final state (red = final, black = history).
+    scattered horizontally for visibility.
     
     Args:
-        fit_state (FitState): FitState instance from trainer.
-        figsize (tuple): Figure size as (width, height). Default (12, 6).
-        margin_fraction (float): Margin as fraction of y-range from percentiles.
-                                Default 0.5 (50% on each side).
-        filepath (str | Path, optional): Path to save the figure.
+        fit_state: FitState instance from trainer.
+        figsize: Figure size as (width, height). Default (12, 6).
+        margin_fraction: Margin as fraction of y-range from percentiles.
+            Default 0.5 (50% on each side).
+        filepath: Path to save the figure.
     """
     from matplotlib.lines import Line2D
     
@@ -474,11 +480,10 @@ def plot_custom_metric(fit_state, metric_name: str,
     """Convenience function to plot a custom metric.
     
     Args:
-        fit_state (FitState): FitState instance with tracked metrics.
-        metric_name (str): Name of the metric to plot.
-        filepath (Optional[Union[str, Path]]): Path to save the figure.
-        plotter (Optional[MetricPlotter]): Custom plotter instance. 
-                                          Defaults to SimpleMetricPlotter.
+        fit_state: FitState instance with tracked metrics.
+        metric_name: Name of the metric to plot.
+        filepath: Path to save the figure.
+        plotter: Custom plotter instance. Defaults to SimpleMetricPlotter.
         **kwargs: Additional parameters passed to the plotter.
     """
     if plotter is None:

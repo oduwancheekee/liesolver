@@ -1,31 +1,29 @@
 pde: heat_1d
-experiment_name: heat-g5_4-mse4
+experiment_name: heat-poly-g5_4-mse6-seed0
 seed: 0
 
 data: 
   res: 100
-  num_ic: 1000
-  num_bc: 2000
+  # res: 600 # for step
   num_domain: 10_000
   range_dim:
     x: [0, 1]
     t: [0, 0.1]
   refresh: 0
-  # New constraints format
   constraints:
-    - expr: 0.5 * (tanh(50 * (x - 0.4)) - tanh(50 * (x - 0.6)))
-    # - expr: sinc(10 * 2*pi*(x-0.3))
-      loc: [t, 0]  # t = t_min (initial condition)
+    - expr: x**2 + x**3 - x**5 + x**7
+      loc: [t, 0]  # t = t_min (IC)
       deriv_order: [0, 0]
-      weight: 1.0
       num_samples: 1000
       name: IC_u0
-    - expr: 0  # Dirichlet BC at x=0
-      loc: [x, 0]
+
+    - expr: 0
+      loc: [x, 0] # x = x_min (left BC)
       num_samples: 1000
       name: BC_left
-    - expr: 0  # Dirichlet BC at x=1
-      loc: [x, 1]
+      
+    - expr: 2.0
+      loc: [x, 1] # x = x_max (right BC)
       num_samples: 1000
       name: BC_right
 
@@ -35,10 +33,12 @@ bricks:
   - T1(0,1) T6(0.1,1e6,log) T4 T1(0,3.14) sin(x) exp(-t)
 
 fit:
-  mse_tol: 9e-4
-  max_terms: 60
-  nfev_global: 4
-  nfev_batch: 4 
-  batch_size: 5000
-  global_every: 5
+  mse_tol: 9e-7
+  max_bricks: 40
   pool_size: 1000
+
+  global_every: 5
+  nfev_global: 4
+
+  batch_size: 9000  # large value turns off batch refine 
+  nfev_batch: 4

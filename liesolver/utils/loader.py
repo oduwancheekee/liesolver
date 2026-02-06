@@ -8,12 +8,13 @@ import yaml
 
 
 def parse_value(text: str):
-    """
-    Parse a string value into a Python type safely.
+    """Parse a string value into a Python type safely.
+    
     Args:
-        text (str): Raw value string (e.g., '1', '0.1', 'true', '[1,2]').
+        text: Raw value string (e.g., '1', '0.1', 'true', '[1,2]').
+    
     Returns:
-        Any: Parsed Python value or original string if parsing fails.
+        Parsed Python value or original string if parsing fails.
     """
     s = text.strip()
     low = s.lower()
@@ -26,10 +27,11 @@ def parse_value(text: str):
 
 
 def parse_path(path: str) -> List[Union[str, int]]:
-    """
-    Parse a dotted/bracketed path into tokens.
+    """Parse a dotted/bracketed path into tokens.
+    
     Args:
-        path (str): Key path like 'data.range_dim[1][1]' or 'data.num_ic'.
+        path: Key path like 'data.range_dim[1][1]' or 'data.num_ic'.
+    
     Returns:
         List[Union[str, int]]: Tokens (str for dict keys, int for list indices).
     """
@@ -67,11 +69,11 @@ def parse_path(path: str) -> List[Union[str, int]]:
 
 
 def set_by_path(config: dict, tokens: Sequence[Union[str, int]], value) -> None:
-    """
-    Set a value in a nested config following path tokens; requires existing keys/indices.
+    """Set a value in a nested config following path tokens.
+    
     Args:
-        config (dict): Root configuration dictionary.
-        tokens (Sequence[Union[str, int]]): Path tokens (str keys, int indices).
+        config: Root configuration dictionary.
+        tokens: Path tokens (str keys, int indices).
         value: Value to assign.
     """
     cur = config
@@ -103,11 +105,11 @@ def set_by_path(config: dict, tokens: Sequence[Union[str, int]], value) -> None:
 
 
 def apply_overrides(config: dict, overrides: Sequence[str]) -> None:
-    """
-    Apply CLI-style overrides (key=val) to a config.
+    """Apply CLI-style overrides (key=val) to a config.
+    
     Args:
-        config (dict): Base config dict to modify in place.
-        overrides (Sequence[str]): Overrides like 'data.num_ic=2000'.
+        config: Base config dict to modify in place.
+        overrides: Overrides like 'data.num_ic=2000'.
     """
     for ov in overrides:
         if "=" not in ov:
@@ -118,11 +120,12 @@ def apply_overrides(config: dict, overrides: Sequence[str]) -> None:
 
 
 def load_config(config_path: str, overrides: Optional[Sequence[str]] = None) -> dict:
-    """
-    Load YAML config and apply optional overrides.
+    """Load YAML config and apply optional overrides.
+    
     Args:
-        config_path (str): Path to YAML file.
-        overrides (Optional[Sequence[str]]): Optional list of 'path=value' strings.
+        config_path: Path to YAML file.
+        overrides: Optional list of 'path=value' strings.
+    
     Returns:
         dict: Final configuration dictionary.
     """
@@ -134,10 +137,11 @@ def load_config(config_path: str, overrides: Optional[Sequence[str]] = None) -> 
 
 
 def parse_cli(default: str = "configs/example.yaml") -> dict:
-    """
-    Parse CLI, load config, and apply overrides.
+    """Parse CLI, load config, and apply overrides.
+    
     Args:
-        default (str): Default config path if none is provided.
+        default: Default config path if none is provided.
+    
     Returns:
         dict: Final configuration dictionary.
     """
@@ -149,10 +153,11 @@ def parse_cli(default: str = "configs/example.yaml") -> dict:
 
 
 def get_cli_overrides(argv: Optional[Sequence[str]] = None) -> List[str]:
-    """
-    Extract 'key=value' overrides from argv.
+    """Extract 'key=value' overrides from argv.
+    
     Args:
-        argv (Optional[Sequence[str]]): Argument list; defaults to sys.argv[1:].
+        argv: Argument list; defaults to sys.argv[1:].
+    
     Returns:
         List[str]: Overrides like ['seed=1', 'data.range_dim[1][1]=0.2'].
     """
@@ -161,11 +166,11 @@ def get_cli_overrides(argv: Optional[Sequence[str]] = None) -> List[str]:
 
 
 def dump_overrides_yaml(file_path: str, overrides: Sequence[str]) -> None:
-    """
-    Dump overrides to a YAML file as path: parsed_value pairs.
+    """Dump overrides to a YAML file as path: parsed_value pairs.
+    
     Args:
-        file_path (str): Destination YAML path.
-        overrides (Sequence[str]): Overrides like ['seed=1', 'data.num_ic=2000'].
+        file_path: Destination YAML path.
+        overrides: Overrides like ['seed=1', 'data.num_ic=2000'].
     """
     mapping = {}
     for ov in overrides:
