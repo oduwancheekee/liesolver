@@ -72,40 +72,45 @@ class Trainer:
         batch_size = self.fit_cfg.get('batch_size', 5)
         pool_size = self.fit_cfg.get('pool_size', 100)
         
+        interrupted = False
         print(f"Action           MSEtrain   MSEtest   MSEdomain Trafos•start_fun         Parameters") 
-        for i in range(max_bricks):
-            # Add brick with the highest score
-            # Score is cosine similarity with residual 
-            score = self.model.add_best_brick(pool_size=pool_size)
-            self.state.log(self.model, self.data, step_type='add_best_brick')
-            a = self.model.amplitudes[-1]
-            sign = '+' if a > 0 else '-'
-            if np.abs(a) < 0.01:
-                amp_str = f'a:{sign}{np.format_float_scientific(abs(a), precision=0, exp_digits=1, trim='-')}'
-            else:
-                amp_str = f'a:{sign}{np.abs(a):.2f}'
-            brick = self.model.bricks[-1]
-            print(f"Add {i+1:<2} {amp_str} | {self.state.train_mse_hist[-1]:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e} | {brick.family} | {brick}")
+        try:
+            for i in range(max_bricks):
+                # Add brick with the highest score
+                # Score is cosine similarity with residual 
+                score = self.model.add_best_brick(pool_size=pool_size)
+                self.state.log(self.model, self.data, step_type='add_best_brick')
+                a = self.model.amplitudes[-1]
+                sign = '+' if a > 0 else '-'
+                if np.abs(a) < 0.01:
+                    amp_str = f'a:{sign}{np.format_float_scientific(abs(a), precision=0, exp_digits=1, trim='-')}'
+                else:
+                    amp_str = f'a:{sign}{np.abs(a):.2f}'
+                brick = self.model.bricks[-1]
+                print(f"Add {i+1:<2} {amp_str} | {self.state.train_mse_hist[-1]:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e} | {brick.family} | {brick}")
 
-            # Refine batch - only batch_size of last added bricks             
-            K = len(self.model.bricks) 
-            if ((i + 1) % batch_size) == 0:
-                active_idx = list(range(max(0, K - batch_size), K))
-                self.model.refine(max_nfev=nfev_batch, active_idx=active_idx)
-                self.state.log(self.model, self.data, step_type='refine_batch')
-                print(f"Refine batch   | {self.model.mse:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e}")
-            
-            # Refine all parameters
-            if (
-                (((i + 1) % global_every) == 0)
-                or ((i + 1) == max_bricks)
-                # or (self.mse < mse_tol)
-            ):
-                self.model.refine(max_nfev=nfev_global)
-                self.state.log(self.model, self.data, step_type='refine_all')
-                print(f"Refine all {K:>2}  | {self.model.mse:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e}")
-            if (self.model.mse <= mse_tol):
-                break
+                # Refine batch - only batch_size of last added bricks             
+                K = len(self.model.bricks) 
+                if ((i + 1) % batch_size) == 0:
+                    active_idx = list(range(max(0, K - batch_size), K))
+                    self.model.refine(max_nfev=nfev_batch, active_idx=active_idx)
+                    self.state.log(self.model, self.data, step_type='refine_batch')
+                    print(f"Refine batch   | {self.model.mse:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e}")
+                
+                # Refine all parameters
+                if (
+                    (((i + 1) % global_every) == 0)
+                    or ((i + 1) == max_bricks)
+                    # or (self.mse < mse_tol)
+                ):
+                    self.model.refine(max_nfev=nfev_global)
+                    self.state.log(self.model, self.data, step_type='refine_all')
+                    print(f"Refine all {K:>2}  | {self.model.mse:.2e} | {self.state.test_mse_hist[-1]:.1e} | {self.state.domain_mse_hist[-1]:.1e}")
+                if (self.model.mse <= mse_tol):
+                    break
+        except KeyboardInterrupt:
+            interrupted = True
+            print(f"\n[Interrupted] Stopping training early. Saving results with {len(self.model.bricks)} bricks...")
         
         self.model.save(self.out_dir)
         self.state.save(self.out_dir / f"{self.experiment_name}-fit_state.npz")
@@ -114,13 +119,13 @@ class Trainer:
                          compact=False)
         plot_ic_bc(self.model, self.data, 
                    filepath=self.out_dir / f"{self.experiment_name}-ic_bc_plot.png",
-                   compact=False)
+                   compact=True)
         plot_ic_bc(self.model, self.data, decompose=True, 
                    filepath=self.out_dir / f"{self.experiment_name}-ic_bc_plot-decompose.png",
-                   compact=False)
+                   compact=True)
         plot_2d_domain(self.model, self.data, 
                        filepath=self.out_dir /  f"{self.experiment_name}-domain_plot.png",
-                       compact=False)
+                       compact=True)
         
         # Plot custom metrics
         from .plotting import plot_custom_metric

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LieSolver</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 4px; }
+
+        .panel { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .panel h2 { margin-top: 0; font-size: 1.2em; color: #555; }
+
+        .intro { color: #555; font-size: 14px; line-height: 1.6; }
+        .intro summary { cursor: pointer; font-weight: 600; color: #333; }
+        .intro code { background: #eee; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+
+        select, input, button, textarea { font-size: 14px; padding: 8px 12px; border-radius: 4px; border: 1px solid #ccc; }
+        select { min-width: 200px; }
+        button { background: #4CAF50; color: white; border: none; cursor: pointer; margin-right: 8px; }
+        button:hover { background: #45a049; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button.stop { background: #f44336; }
+        button.stop:hover { background: #d32f2f; }
+
+        .config-editor { width: 100%; min-height: 300px; font-family: monospace; font-size: 13px; }
+
+        #log { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 4px;
+               font-family: monospace; font-size: 13px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; }
+        #log .error { color: #f44336; }
+        #log .info { color: #4CAF50; }
+        #log .refine { color: #2196F3; }
+
+        .figures { display: flex; flex-wrap: wrap; gap: 15px; }
+        .figures img { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .figure-container { flex: 1 1 45%; min-width: 300px; }
+
+        .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+        .status { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+        .status.running { background: #fff3cd; color: #856404; }
+        .status.done { background: #d4edda; color: #155724; }
+        .status.idle { background: #e9ecef; color: #495057; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>LieSolver</h1>
+
+        <div class="panel intro">
+            <p>
+                <strong>LieSolver</strong> approximates PDE solutions as a linear combination of
+                <em>Lie-symmetry transformed</em> start functions. Each "brick" is a known
+                analytical solution (e.g.&nbsp;<code>sin(x)·exp(-t)</code>) reshaped by one or more
+                Lie-group transformations. The model greedily adds bricks, fitting amplitudes
+                via linear regression and refining nonlinear parameters.
+            </p>
+            <details>
+                <summary>Configuration hints</summary>
+                <ul>
+                    <li><code>pde</code> &mdash; PDE module name (e.g. <code>heat_1d</code>, <code>wave_1d</code>).</li>
+                    <li><code>data.constraints</code> &mdash; initial/boundary conditions: each entry has
+                        <code>expr</code> (math expression), <code>loc</code> (which variable is fixed and its value),
+                        and <code>num_samples</code>.</li>
+                    <li><code>bricks</code> &mdash; list of brick family strings. Each is a sequence of transformations
+                        (e.g.&nbsp;<code>T4 T1(0,3.14) sin(x) exp(-t)</code>).
+                        Parameters in parentheses set initial search ranges.</li>
+                    <li><code>fit.max_bricks</code> &mdash; maximum number of bricks to add.</li>
+                    <li><code>fit.mse_tol</code> &mdash; stop when training MSE drops below this.</li>
+                    <li><code>fit.pool_size</code> &mdash; candidates sampled per brick addition (larger = slower but better).</li>
+                    <li><code>fit.global_every</code> &mdash; refine all parameters every N bricks.</li>
+                </ul>
+            </details>
+        </div>
+
+        <div class="panel">
+            <h2>Configuration</h2>
+            <div class="row">
+                <select id="configSelect">
+                    {% for cfg in configs %}
+                    <option value="{{ cfg }}">{{ cfg }}</option>
+                    {% endfor %}
+                </select>
+                <button onclick="loadConfig()">Load</button>
+                <span id="status" class="status idle">Idle</span>
+            </div>
+            <textarea id="configEditor" class="config-editor" placeholder="Select and load a config..."></textarea>
+        </div>
+
+        <div class="panel">
+            <h2>Training</h2>
+            <div class="row">
+                <button id="fitBtn" onclick="startFit()">&#9654; Start Fit</button>
+                <button id="stopBtn" class="stop" onclick="stopFit()" disabled>&#9724; Stop</button>
+            </div>
+            <div id="log"></div>
+        </div>
+
+        <div class="panel">
+            <h2>Results</h2>
+            <div id="outputDir" style="margin-bottom:12px;font-family:monospace;font-size:13px;"></div>
+            <div id="figures" class="figures"></div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+
+        async function loadConfig() {
+            const file = document.getElementById('configSelect').value;
+            const resp = await fetch(`/api/config/${file}`);
+            document.getElementById('configEditor').value = await resp.text();
+        }
+
+        async function startFit() {
+            const configYaml = document.getElementById('configEditor').value;
+
+            // Close any previous SSE connection
+            if (eventSource) { eventSource.close(); eventSource = null; }
+
+            document.getElementById('log').innerHTML = '';
+            document.getElementById('figures').innerHTML = '';
+            document.getElementById('outputDir').innerHTML = '';
+            document.getElementById('fitBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            setStatus('running', 'Running...');
+
+            // Start SSE listener before triggering fit
+            eventSource = new EventSource('/api/progress');
+            eventSource.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                if (data.type === 'ping') return;
+
+                const log = document.getElementById('log');
+                const cls = {'error':'error','info':'info','refine':'refine'}[data.type] || '';
+                log.innerHTML += `<span class="${cls}">${escapeHtml(data.msg)}</span>\n`;
+                log.scrollTop = log.scrollHeight;
+
+                if (data.type === 'done' || data.type === 'error') {
+                    eventSource.close(); eventSource = null;
+                    document.getElementById('fitBtn').disabled = false;
+                    document.getElementById('stopBtn').disabled = true;
+                    setStatus(data.type === 'done' ? 'done' : 'idle',
+                              data.type === 'done' ? 'Complete' : 'Error');
+                    if (data.type === 'done') loadFigures();
+                }
+            };
+
+            const resp = await fetch('/api/fit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({config_yaml: configYaml})
+            });
+            const result = await resp.json();
+            if (result.error) {
+                document.getElementById('log').innerHTML = `<span class="error">${escapeHtml(result.error)}</span>\n`;
+                document.getElementById('fitBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                setStatus('idle', 'Error');
+                if (eventSource) { eventSource.close(); eventSource = null; }
+            }
+        }
+
+        async function stopFit() {
+            await fetch('/api/stop', {method: 'POST'});
+            document.getElementById('stopBtn').disabled = true;
+        }
+
+        async function loadFigures() {
+            const resp = await fetch('/api/figures');
+            const data = await resp.json();
+            const dirEl = document.getElementById('outputDir');
+            if (data.output_dir) {
+                dirEl.innerHTML = `<a href="file://${data.output_dir}" title="Open folder">${data.output_dir}</a>`;
+            }
+            const container = document.getElementById('figures');
+            container.innerHTML = '';
+            for (const fig of data.figures) {
+                const div = document.createElement('div');
+                div.className = 'figure-container';
+                div.innerHTML = `<img src="/api/figure/${fig}?t=${Date.now()}" alt="${escapeHtml(fig)}"><p>${escapeHtml(fig)}</p>`;
+                container.appendChild(div);
+            }
+        }
+
+        function escapeHtml(s) {
+            const d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        function setStatus(cls, text) {
+            const el = document.getElementById('status');
+            el.className = 'status ' + cls;
+            el.textContent = text;
+        }
+
+        loadConfig();
+    </script>
+</body>
+</html>
